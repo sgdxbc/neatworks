@@ -1,4 +1,4 @@
-use std::mem::replace;
+use std::{marker::PhantomData, mem::replace};
 
 use tokio::{
     spawn,
@@ -7,13 +7,38 @@ use tokio::{
 };
 
 pub trait ActorState {
-    type Message;
-    fn update(&mut self, message: Self::Message);
+    type Message<'a>;
+
+    fn update<'a>(&mut self, message: Self::Message<'a>);
+}
+
+pub trait ActorStateExt: ActorState {
+    type OwnedMessage;
+
+    fn update_owned(&mut self, message: Self::OwnedMessage);
+
+    fn adapt<'a, M, F>(self, adapter: F) -> Adapt<F, M, Self>
+    where
+        Self: Sized,
+    {
+        Adapt(adapter, self, PhantomData)
+    }
+}
+
+impl<A: ActorState> ActorStateExt for A {
+    type OwnedMessage = Self::Message<'static>;
+
+    fn update_owned(&mut self, message: Self::OwnedMessage) {
+        self.update(message)
+    }
 }
 
 #[derive(Debug)]
-pub struct Detached<A: ActorState> {
-    inbox: (UnboundedSender<A::Message>, UnboundedReceiver<A::Message>),
+pub struct Detached<A: ActorStateExt> {
+    inbox: (
+        UnboundedSender<A::OwnedMessage>,
+        UnboundedReceiver<A::OwnedMessage>,
+    ),
     actor: A,
 }
 
@@ -29,40 +54,43 @@ impl<A: ActorState> From<A> for Detached<A> {
     }
 }
 
-impl<A: ActorState> Detached<A> {
-    pub fn inbox(&self) -> Inbox<A::Message> {
+impl<A: ActorStateExt> Detached<A> {
+    pub fn inbox(&self) -> Inbox<A::OwnedMessage> {
         Inbox(self.inbox.0.clone())
     }
 
     pub fn start(mut self) -> JoinHandle<A>
     where
         A: Send + 'static,
-        A::Message: Send,
+        A::OwnedMessage: Send,
     {
         drop(self.inbox.0);
         spawn(async move {
             while let Some(message) = self.inbox.1.recv().await {
-                self.actor.update(message)
+                self.actor.update_owned(message)
             }
             self.actor
         })
     }
 }
 
-pub enum ActorHandle<A: ActorState> {
+pub enum ActorHandle<A: ActorStateExt> {
     Inlined(A),
-    Detached(Inbox<A::Message>),
+    Detached(Inbox<A::OwnedMessage>),
     Intermediate, // avoid e.g. option dance
 }
 
-impl<A: ActorState> ActorState for ActorHandle<A> {
-    type Message = A::Message;
-    fn update(&mut self, message: Self::Message) {
+impl<A: ActorState> ActorState for ActorHandle<A>
+where
+    for<'a> A::Message<'a>: Into<A::Message<'static>>,
+{
+    type Message<'a> = A::Message<'a>;
+    fn update<'a>(&mut self, message: Self::Message<'a>) {
         match self {
             ActorHandle::Inlined(actor) => actor.update(message),
             ActorHandle::Detached(inbox) => {
                 // or just trigger backward panic chain?
-                if inbox.0.send(message).is_err() {
+                if inbox.0.send(message.into()).is_err() {
                     //
                 }
             }
@@ -99,5 +127,19 @@ impl<A: ActorState> ActorHandle<A> {
             Self::Detached(_) => None,
             Self::Intermediate => unreachable!(),
         }
+    }
+}
+
+pub struct Adapt<F, M, A>(F, A, PhantomData<M>);
+
+impl<'a, F, M, A> ActorState for Adapt<F, M, A>
+where
+    F: FnMut(M) -> A::Message<'a>,
+    A: ActorState,
+{
+    type Message<'b> = M;
+
+    fn update<'b>(&mut self, message: Self::Message<'b>) {
+        self.1.update((self.0)(message))
     }
 }
