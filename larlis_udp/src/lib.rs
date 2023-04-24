@@ -1,6 +1,6 @@
 use std::{net::SocketAddr, sync::Arc};
 
-use bighear_core::ActorState;
+use larlis_core::ActorState;
 use tokio::net::UdpSocket;
 
 pub struct In<A> {
