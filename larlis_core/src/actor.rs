@@ -1,4 +1,4 @@
-use std::{marker::PhantomData, mem::replace};
+use std::marker::PhantomData;
 
 use tokio::{
     spawn,
@@ -6,39 +6,30 @@ use tokio::{
     task::JoinHandle,
 };
 
-pub trait StateCore {
+pub trait State {
     type Message<'a>;
 
     fn update<'a>(&mut self, message: Self::Message<'a>);
 }
 
-pub trait State: StateCore {
-    type OwnedMessage;
+// need a better name
+pub trait StateMove {
+    type Message;
 
-    fn update_owned(&mut self, message: Self::OwnedMessage);
-
-    fn adapt<'a, M, F>(self, adapter: F) -> Adapt<F, M, Self>
-    where
-        Self: Sized,
-    {
-        Adapt(adapter, self, PhantomData)
-    }
+    fn update(&mut self, message: Self::Message);
 }
 
-impl<A: StateCore> State for A {
-    type OwnedMessage = Self::Message<'static>;
+impl<A: StateMove> State for A {
+    type Message<'a> = <Self as StateMove>::Message;
 
-    fn update_owned(&mut self, message: Self::OwnedMessage) {
-        self.update(message)
+    fn update(&mut self, message: Self::Message<'_>) {
+        StateMove::update(self, message)
     }
 }
 
 #[derive(Debug)]
-pub struct Detached<A: State> {
-    inbox: (
-        UnboundedSender<A::OwnedMessage>,
-        UnboundedReceiver<A::OwnedMessage>,
-    ),
+pub struct Detached<A: StateMove> {
+    inbox: (UnboundedSender<A::Message>, UnboundedReceiver<A::Message>),
     actor: A,
 }
 
@@ -51,7 +42,7 @@ impl<M> Clone for Inbox<M> {
     }
 }
 
-impl<A: StateCore> From<A> for Detached<A> {
+impl<A: StateMove> From<A> for Detached<A> {
     fn from(value: A) -> Self {
         Self {
             inbox: unbounded_channel(),
@@ -60,100 +51,68 @@ impl<A: StateCore> From<A> for Detached<A> {
     }
 }
 
-impl<A: State> Detached<A> {
-    pub fn inbox(&self) -> Inbox<A::OwnedMessage> {
+impl<A: StateMove> Detached<A> {
+    pub fn inbox(&self) -> Inbox<A::Message> {
         Inbox(self.inbox.0.clone())
     }
 
     pub fn start(mut self) -> JoinHandle<A>
     where
         A: Send + 'static,
-        A::OwnedMessage: Send,
+        A::Message: Send,
     {
         drop(self.inbox.0);
         spawn(async move {
             while let Some(message) = self.inbox.1.recv().await {
-                self.actor.update_owned(message)
+                self.actor.update(message)
             }
             self.actor
         })
     }
 }
 
-pub enum Handle<A: State> {
-    Inlined(A),
-    Detached(Inbox<A::OwnedMessage>),
-    Intermediate, // avoid e.g. option dance
-}
+impl<M> StateMove for Inbox<M> {
+    type Message = M;
 
-impl<A: StateCore> StateCore for Handle<A>
-where
-    for<'a> A::Message<'a>: Into<A::Message<'static>>,
-{
-    type Message<'a> = A::Message<'a>;
-    fn update<'a>(&mut self, message: Self::Message<'a>) {
-        match self {
-            Handle::Inlined(actor) => actor.update(message),
-            Handle::Detached(inbox) => {
-                // or just trigger backward panic chain?
-                if inbox.0.send(message.into()).is_err() {
-                    //
-                }
-            }
-            Handle::Intermediate => unreachable!(),
+    fn update(&mut self, message: Self::Message) {
+        if self.0.send(message).is_err() {
+            //
         }
     }
 }
 
-impl<A: State> Handle<A> {
-    pub fn into_inner(self) -> A {
-        if let Self::Inlined(actor) = self {
-            actor
-        } else {
-            unimplemented!()
-        }
-    }
-
-    pub fn detach(&mut self) -> Option<Detached<A>> {
-        match self {
-            Self::Inlined(_) => {
-                let Self::Inlined(actor) = replace(self, Self::Intermediate) else {
-                    unreachable!()
-                };
-                let actor = Detached::from(actor);
-                *self = Self::Detached(actor.inbox());
-                Some(actor)
-            }
-            Self::Detached(_) => None,
-            Self::Intermediate => unreachable!(),
-        }
-    }
-
-    pub fn try_clone(&self) -> Option<Self> {
-        if let Self::Detached(inbox) = self {
-            Some(Self::Detached(inbox.clone()))
-        } else {
-            None
-        }
-    }
-}
-
-impl<A: State> Clone for Handle<A> {
-    fn clone(&self) -> Self {
-        self.try_clone().unwrap()
-    }
-}
+pub type Effect<M> = Box<dyn StateMove<Message = M>>;
 
 pub struct Adapt<F, M, A>(F, A, PhantomData<M>);
 
-impl<'a, F, M, A> StateCore for Adapt<F, M, A>
+impl<'a, F, M, A> StateMove for Adapt<F, M, A>
 where
+    A: State,
+    // M could be `&'a _`
     F: FnMut(M) -> A::Message<'a>,
-    A: StateCore,
 {
-    type Message<'b> = M;
+    type Message = M;
 
-    fn update<'b>(&mut self, message: Self::Message<'b>) {
+    fn update(&mut self, message: Self::Message) {
         self.1.update((self.0)(message))
+    }
+}
+
+pub trait AdaptFn<M, A> {
+    fn then(self, actor: A) -> Adapt<Self, M, A>
+    where
+        Self: Sized;
+}
+
+impl<F, M, A> AdaptFn<M, A> for F
+where
+    F: FnMut(M) -> A::Message,
+    A: StateMove,
+{
+    fn then(self, actor: A) -> Adapt<Self, M, A>
+    where
+        Self: Sized,
+    {
+        Adapt(self, actor, PhantomData)
     }
 }

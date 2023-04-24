@@ -34,7 +34,7 @@ impl Out {
     }
 }
 
-impl actor::StateCore for Out {
+impl actor::State for Out {
     type Message<'a> = (SocketAddr, &'a [u8]);
 
     fn update<'a>(&mut self, message: Self::Message<'a>) {

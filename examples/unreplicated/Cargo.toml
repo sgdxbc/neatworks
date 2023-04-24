@@ -2,3 +2,8 @@
 name = "larlis_unreplicated"
 version = "0.1.0"
 edition = "2021"
+
+[dependencies]
+larlis_core = { version = "0.1.0", path = "../../larlis_core" }
+serde = { version = "1.0.160", features = ["derive"] }
+tokio = { version = "1.27.0", features = ["macros", "rt-multi-thread", "signal", "time"] }
