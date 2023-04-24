@@ -9,7 +9,7 @@ use tokio::{
 pub trait State {
     type Message<'a>;
 
-    fn update<'a>(&mut self, message: Self::Message<'a>);
+    fn update(&mut self, message: Self::Message<'_>);
 }
 
 // need a better name
@@ -19,11 +19,11 @@ pub trait StateMove {
     fn update(&mut self, message: Self::Message);
 }
 
-impl<A: StateMove> State for A {
-    type Message<'a> = <Self as StateMove>::Message;
+impl<A: State> StateMove for A {
+    type Message = <Self as State>::Message<'static>;
 
-    fn update(&mut self, message: Self::Message<'_>) {
-        StateMove::update(self, message)
+    fn update(&mut self, message: Self::Message) {
+        State::update(self, message)
     }
 }
 
@@ -71,10 +71,10 @@ impl<A: StateMove> Detached<A> {
     }
 }
 
-impl<M> StateMove for Inbox<M> {
-    type Message = M;
+impl<M> State for Inbox<M> {
+    type Message<'a> = M;
 
-    fn update(&mut self, message: Self::Message) {
+    fn update(&mut self, message: Self::Message<'_>) {
         if self.0.send(message).is_err() {
             //
         }
@@ -104,10 +104,10 @@ pub trait AdaptFn<M, A> {
         Self: Sized;
 }
 
-impl<F, M, A> AdaptFn<M, A> for F
+impl<'a, F, M, A> AdaptFn<M, A> for F
 where
-    F: FnMut(M) -> A::Message,
-    A: StateMove,
+    A: State,
+    F: FnMut(M) -> A::Message<'a>,
 {
     fn then(self, actor: A) -> Adapt<Self, M, A>
     where
