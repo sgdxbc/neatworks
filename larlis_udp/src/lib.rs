@@ -1,7 +1,7 @@
 use std::{net::SocketAddr, sync::Arc};
 
 use larlis_core::actor;
-use tokio::net::UdpSocket;
+use tokio::{net::UdpSocket, spawn};
 
 pub struct In<A> {
     socket: Arc<UdpSocket>,
@@ -25,20 +25,16 @@ impl<A> In<A> {
     }
 }
 
-pub struct Out(Arc<UdpSocket>);
-
-impl Out {
-    pub async fn new(socket: Arc<UdpSocket>) -> Self {
-        socket.writable().await.unwrap();
-        Self(socket)
-    }
-}
+pub struct Out(pub Arc<UdpSocket>);
 
 impl actor::State for Out {
-    type Message<'a> = (SocketAddr, &'a [u8]);
+    type Message<'a> = (SocketAddr, Vec<u8>);
 
-    fn update<'a>(&mut self, message: Self::Message<'a>) {
+    fn update(&mut self, message: Self::Message<'_>) {
         let (target, buf) = message;
-        self.0.try_send_to(buf, target).unwrap();
+        let socket = self.0.clone();
+        spawn(async move {
+            socket.send_to(&buf, target).await.unwrap();
+        });
     }
 }

@@ -7,4 +7,4 @@ edition = "2021"
 
 [dependencies]
 larlis_core = { version = "0.1.0", path = "../larlis_core" }
-tokio = { version = "1.27.0", features = ["net"] }
+tokio = { version = "1.27.0", features = ["net", "rt"] }

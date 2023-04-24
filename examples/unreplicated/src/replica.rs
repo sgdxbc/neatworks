@@ -34,3 +34,22 @@ impl actor::State for Replica {
         self.upcall.update(upcall);
     }
 }
+
+pub struct App<A>(pub A, pub actor::Effect<(u32, Reply)>);
+
+impl<A> actor::State for App<A>
+where
+    A: larlis_core::App,
+{
+    type Message<'a> = Upcall;
+
+    fn update(&mut self, message: Self::Message<'_>) {
+        let result = self.0.execute(message.op_num, &message.op);
+        let client_id = message.client_id;
+        let message = Reply {
+            request_num: message.request_num,
+            result,
+        };
+        self.1.update((client_id, message));
+    }
+}
