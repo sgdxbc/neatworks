@@ -1,3 +1,3 @@
 pub mod actor;
 
-pub use actor::{ActorHandle, ActorState};
+pub use actor::{ActorHandle, ActorStateCore};

@@ -6,13 +6,13 @@ use tokio::{
     task::JoinHandle,
 };
 
-pub trait ActorState {
+pub trait ActorStateCore {
     type Message<'a>;
 
     fn update<'a>(&mut self, message: Self::Message<'a>);
 }
 
-pub trait ActorStateExt: ActorState {
+pub trait ActorState: ActorStateCore {
     type OwnedMessage;
 
     fn update_owned(&mut self, message: Self::OwnedMessage);
@@ -25,7 +25,7 @@ pub trait ActorStateExt: ActorState {
     }
 }
 
-impl<A: ActorState> ActorStateExt for A {
+impl<A: ActorStateCore> ActorState for A {
     type OwnedMessage = Self::Message<'static>;
 
     fn update_owned(&mut self, message: Self::OwnedMessage) {
@@ -34,7 +34,7 @@ impl<A: ActorState> ActorStateExt for A {
 }
 
 #[derive(Debug)]
-pub struct Detached<A: ActorStateExt> {
+pub struct Detached<A: ActorState> {
     inbox: (
         UnboundedSender<A::OwnedMessage>,
         UnboundedReceiver<A::OwnedMessage>,
@@ -42,10 +42,16 @@ pub struct Detached<A: ActorStateExt> {
     actor: A,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct Inbox<M>(UnboundedSender<M>);
 
-impl<A: ActorState> From<A> for Detached<A> {
+impl<M> Clone for Inbox<M> {
+    fn clone(&self) -> Self {
+        Self(self.0.clone())
+    }
+}
+
+impl<A: ActorStateCore> From<A> for Detached<A> {
     fn from(value: A) -> Self {
         Self {
             inbox: unbounded_channel(),
@@ -54,7 +60,7 @@ impl<A: ActorState> From<A> for Detached<A> {
     }
 }
 
-impl<A: ActorStateExt> Detached<A> {
+impl<A: ActorState> Detached<A> {
     pub fn inbox(&self) -> Inbox<A::OwnedMessage> {
         Inbox(self.inbox.0.clone())
     }
@@ -74,13 +80,13 @@ impl<A: ActorStateExt> Detached<A> {
     }
 }
 
-pub enum ActorHandle<A: ActorStateExt> {
+pub enum ActorHandle<A: ActorState> {
     Inlined(A),
     Detached(Inbox<A::OwnedMessage>),
     Intermediate, // avoid e.g. option dance
 }
 
-impl<A: ActorState> ActorState for ActorHandle<A>
+impl<A: ActorStateCore> ActorStateCore for ActorHandle<A>
 where
     for<'a> A::Message<'a>: Into<A::Message<'static>>,
 {
@@ -96,12 +102,6 @@ where
             }
             ActorHandle::Intermediate => unreachable!(),
         }
-    }
-}
-
-impl<A: ActorState> From<A> for ActorHandle<A> {
-    fn from(value: A) -> Self {
-        Self::Inlined(value)
     }
 }
 
@@ -128,14 +128,28 @@ impl<A: ActorState> ActorHandle<A> {
             Self::Intermediate => unreachable!(),
         }
     }
+
+    pub fn try_clone(&self) -> Option<Self> {
+        if let Self::Detached(inbox) = self {
+            Some(Self::Detached(inbox.clone()))
+        } else {
+            None
+        }
+    }
+}
+
+impl<A: ActorState> Clone for ActorHandle<A> {
+    fn clone(&self) -> Self {
+        self.try_clone().unwrap()
+    }
 }
 
 pub struct Adapt<F, M, A>(F, A, PhantomData<M>);
 
-impl<'a, F, M, A> ActorState for Adapt<F, M, A>
+impl<'a, F, M, A> ActorStateCore for Adapt<F, M, A>
 where
     F: FnMut(M) -> A::Message<'a>,
-    A: ActorState,
+    A: ActorStateCore,
 {
     type Message<'b> = M;
 
