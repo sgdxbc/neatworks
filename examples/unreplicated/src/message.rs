@@ -2,13 +2,13 @@ use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Request {
-    client_id: u32,
-    request_num: u32,
-    op: Vec<u8>,
+    pub client_id: u32,
+    pub request_num: u32,
+    pub op: Vec<u8>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Reply {
-    request_num: u32,
-    result: Vec<u8>,
+    pub request_num: u32,
+    pub result: Vec<u8>,
 }
