@@ -1,6 +1,6 @@
 use std::{net::SocketAddr, sync::Arc};
 
-use larlis_core::ActorStateCore;
+use larlis_core::actor;
 use tokio::net::UdpSocket;
 
 pub struct In<A> {
@@ -15,7 +15,7 @@ impl<A> In<A> {
 
     pub async fn start_bytes(&mut self)
     where
-        A: for<'a> ActorStateCore<Message<'a> = (SocketAddr, &'a [u8])>,
+        A: for<'a> actor::State<Message<'a> = (SocketAddr, &'a [u8])>,
     {
         let mut buf = vec![0; 65536];
         loop {
@@ -34,7 +34,7 @@ impl Out {
     }
 }
 
-impl ActorStateCore for Out {
+impl actor::StateCore for Out {
     type Message<'a> = (SocketAddr, &'a [u8]);
 
     fn update<'a>(&mut self, message: Self::Message<'a>) {

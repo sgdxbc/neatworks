@@ -6,13 +6,13 @@ use tokio::{
     task::JoinHandle,
 };
 
-pub trait ActorStateCore {
+pub trait StateCore {
     type Message<'a>;
 
     fn update<'a>(&mut self, message: Self::Message<'a>);
 }
 
-pub trait ActorState: ActorStateCore {
+pub trait State: StateCore {
     type OwnedMessage;
 
     fn update_owned(&mut self, message: Self::OwnedMessage);
@@ -25,7 +25,7 @@ pub trait ActorState: ActorStateCore {
     }
 }
 
-impl<A: ActorStateCore> ActorState for A {
+impl<A: StateCore> State for A {
     type OwnedMessage = Self::Message<'static>;
 
     fn update_owned(&mut self, message: Self::OwnedMessage) {
@@ -34,7 +34,7 @@ impl<A: ActorStateCore> ActorState for A {
 }
 
 #[derive(Debug)]
-pub struct Detached<A: ActorState> {
+pub struct Detached<A: State> {
     inbox: (
         UnboundedSender<A::OwnedMessage>,
         UnboundedReceiver<A::OwnedMessage>,
@@ -51,7 +51,7 @@ impl<M> Clone for Inbox<M> {
     }
 }
 
-impl<A: ActorStateCore> From<A> for Detached<A> {
+impl<A: StateCore> From<A> for Detached<A> {
     fn from(value: A) -> Self {
         Self {
             inbox: unbounded_channel(),
@@ -60,7 +60,7 @@ impl<A: ActorStateCore> From<A> for Detached<A> {
     }
 }
 
-impl<A: ActorState> Detached<A> {
+impl<A: State> Detached<A> {
     pub fn inbox(&self) -> Inbox<A::OwnedMessage> {
         Inbox(self.inbox.0.clone())
     }
@@ -80,32 +80,32 @@ impl<A: ActorState> Detached<A> {
     }
 }
 
-pub enum ActorHandle<A: ActorState> {
+pub enum Handle<A: State> {
     Inlined(A),
     Detached(Inbox<A::OwnedMessage>),
     Intermediate, // avoid e.g. option dance
 }
 
-impl<A: ActorStateCore> ActorStateCore for ActorHandle<A>
+impl<A: StateCore> StateCore for Handle<A>
 where
     for<'a> A::Message<'a>: Into<A::Message<'static>>,
 {
     type Message<'a> = A::Message<'a>;
     fn update<'a>(&mut self, message: Self::Message<'a>) {
         match self {
-            ActorHandle::Inlined(actor) => actor.update(message),
-            ActorHandle::Detached(inbox) => {
+            Handle::Inlined(actor) => actor.update(message),
+            Handle::Detached(inbox) => {
                 // or just trigger backward panic chain?
                 if inbox.0.send(message.into()).is_err() {
                     //
                 }
             }
-            ActorHandle::Intermediate => unreachable!(),
+            Handle::Intermediate => unreachable!(),
         }
     }
 }
 
-impl<A: ActorState> ActorHandle<A> {
+impl<A: State> Handle<A> {
     pub fn into_inner(self) -> A {
         if let Self::Inlined(actor) = self {
             actor
@@ -138,7 +138,7 @@ impl<A: ActorState> ActorHandle<A> {
     }
 }
 
-impl<A: ActorState> Clone for ActorHandle<A> {
+impl<A: State> Clone for Handle<A> {
     fn clone(&self) -> Self {
         self.try_clone().unwrap()
     }
@@ -146,10 +146,10 @@ impl<A: ActorState> Clone for ActorHandle<A> {
 
 pub struct Adapt<F, M, A>(F, A, PhantomData<M>);
 
-impl<'a, F, M, A> ActorStateCore for Adapt<F, M, A>
+impl<'a, F, M, A> StateCore for Adapt<F, M, A>
 where
     F: FnMut(M) -> A::Message<'a>,
-    A: ActorStateCore,
+    A: StateCore,
 {
     type Message<'b> = M;
 

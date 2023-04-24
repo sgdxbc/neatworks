@@ -1,0 +1,4 @@
+[package]
+name = "larlis_unreplicated"
+version = "0.1.0"
+edition = "2021"
