@@ -1,4 +1,4 @@
-use std::marker::PhantomData;
+use std::{any::Any, marker::PhantomData};
 
 use tokio::{
     spawn,
@@ -6,29 +6,28 @@ use tokio::{
     task::JoinHandle,
 };
 
-pub trait State {
-    type Message<'a>;
-
-    fn update(&mut self, message: Self::Message<'_>);
-}
-
-// need a better name
-pub trait StateMove {
+pub trait State<'a>: Any {
     type Message;
 
     fn update(&mut self, message: Self::Message);
 }
 
-impl<A: State> StateMove for A {
-    type Message = <Self as State>::Message<'static>;
+pub trait StateStatic {
+    type Message;
+
+    fn update(&mut self, message: Self::Message);
+}
+
+impl<A: State<'static>> StateStatic for A {
+    type Message = <A as State<'static>>::Message;
 
     fn update(&mut self, message: Self::Message) {
-        State::update(self, message)
+        <A as State<'static>>::update(self, message)
     }
 }
 
 #[derive(Debug)]
-pub struct Detached<A: StateMove> {
+pub struct Detached<A: StateStatic> {
     inbox: (UnboundedSender<A::Message>, UnboundedReceiver<A::Message>),
     actor: A,
 }
@@ -42,7 +41,7 @@ impl<M> Clone for Inbox<M> {
     }
 }
 
-impl<A: StateMove> From<A> for Detached<A> {
+impl<A: StateStatic> From<A> for Detached<A> {
     fn from(value: A) -> Self {
         Self {
             inbox: unbounded_channel(),
@@ -51,7 +50,7 @@ impl<A: StateMove> From<A> for Detached<A> {
     }
 }
 
-impl<A: StateMove> Detached<A> {
+impl<A: StateStatic> Detached<A> {
     pub fn inbox(&self) -> Inbox<A::Message> {
         Inbox(self.inbox.0.clone())
     }
@@ -71,25 +70,29 @@ impl<A: StateMove> Detached<A> {
     }
 }
 
-impl<M> State for Inbox<M> {
-    type Message<'a> = M;
+impl<'a, M: 'static> State<'a> for Inbox<M> {
+    type Message = M;
 
-    fn update(&mut self, message: Self::Message<'_>) {
+    fn update(&mut self, message: Self::Message) {
         if self.0.send(message).is_err() {
             //
         }
     }
 }
 
-pub type Effect<M> = Box<dyn StateMove<Message = M>>;
+// this currently not work, because GAT is not compatible with trait object (yet)
+// pub type Effect<M> = Effect2<'static, M>;
+// pub type Effect2<'a, M> = Box<dyn State<Message<'a> = M>>;
+pub type Effect<M> = Box<dyn State<'static, Message = M>>;
+
+// TODO need to be more general
 
 pub struct Adapt<F, M, A>(F, A, PhantomData<M>);
 
-impl<'a, F, M, A> StateMove for Adapt<F, M, A>
+impl<'a, F, M: 'static, A> State<'_> for Adapt<F, M, A>
 where
-    A: State,
-    // M could be `&'a _`
-    F: FnMut(M) -> A::Message<'a>,
+    A: State<'a>,
+    F: FnMut(M) -> A::Message + 'static,
 {
     type Message = M;
 
@@ -106,8 +109,8 @@ pub trait AdaptFn<M, A> {
 
 impl<'a, F, M, A> AdaptFn<M, A> for F
 where
-    A: State,
-    F: FnMut(M) -> A::Message<'a>,
+    A: State<'a>,
+    F: FnMut(M) -> A::Message,
 {
     fn then(self, actor: A) -> Adapt<Self, M, A>
     where

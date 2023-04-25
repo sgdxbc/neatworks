@@ -13,9 +13,9 @@ impl<A> In<A> {
         Self { socket, actor }
     }
 
-    pub async fn start_bytes(&mut self)
+    pub async fn start(&mut self)
     where
-        A: for<'a> actor::State<Message<'a> = (SocketAddr, &'a [u8])>,
+        A: for<'a> actor::State<'a, Message = (SocketAddr, &'a [u8])>,
     {
         let mut buf = vec![0; 65536];
         loop {
@@ -27,10 +27,10 @@ impl<A> In<A> {
 
 pub struct Out(pub Arc<UdpSocket>);
 
-impl actor::State for Out {
-    type Message<'a> = (SocketAddr, Vec<u8>);
+impl actor::State<'_> for Out {
+    type Message = (SocketAddr, Vec<u8>);
 
-    fn update(&mut self, message: Self::Message<'_>) {
+    fn update(&mut self, message: Self::Message) {
         let (target, buf) = message;
         let socket = self.0.clone();
         spawn(async move {

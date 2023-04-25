@@ -1,6 +1,6 @@
 use larlis_core::actor;
 
-use crate::message::{Reply, Request};
+use crate::{Reply, Request};
 
 pub enum Message {
     Handle(Reply),
@@ -33,10 +33,10 @@ impl Client {
     }
 }
 
-impl actor::State for Client {
-    type Message<'a> = Message;
+impl actor::State<'_> for Client {
+    type Message = Message;
 
-    fn update(&mut self, message: Self::Message<'_>) {
+    fn update(&mut self, message: Self::Message) {
         match message {
             Message::Invoke(op) => self.invoke(op),
             Message::Handle(message) => self.handle(message),

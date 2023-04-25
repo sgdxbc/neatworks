@@ -1,6 +1,6 @@
 use larlis_core::actor;
 
-use crate::message::{Reply, Request};
+use crate::{Reply, Request};
 
 pub struct Upcall {
     op_num: u32,
@@ -20,10 +20,10 @@ impl Replica {
     }
 }
 
-impl actor::State for Replica {
-    type Message<'a> = Request;
+impl actor::State<'_> for Replica {
+    type Message = Request;
 
-    fn update(&mut self, message: Self::Message<'_>) {
+    fn update(&mut self, message: Self::Message) {
         self.op_num += 1;
         let upcall = Upcall {
             op_num: self.op_num,
@@ -37,13 +37,13 @@ impl actor::State for Replica {
 
 pub struct App<A>(pub A, pub actor::Effect<(u32, Reply)>);
 
-impl<A> actor::State for App<A>
+impl<A> actor::State<'_> for App<A>
 where
-    A: larlis_core::App,
+    A: larlis_core::App + 'static,
 {
-    type Message<'a> = Upcall;
+    type Message = Upcall;
 
-    fn update(&mut self, message: Self::Message<'_>) {
+    fn update(&mut self, message: Self::Message) {
         let result = self.0.execute(message.op_num, &message.op);
         let client_id = message.client_id;
         let message = Reply {
