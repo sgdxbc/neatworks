@@ -1,4 +1,4 @@
-use std::{any::Any, marker::PhantomData};
+use std::any::Any;
 
 use tokio::{
     spawn,
@@ -80,42 +80,41 @@ impl<'a, M: 'static> State<'a> for Inbox<M> {
     }
 }
 
-// this currently not work, because GAT is not compatible with trait object (yet)
-// pub type Effect<M> = Effect2<'static, M>;
-// pub type Effect2<'a, M> = Box<dyn State<Message<'a> = M>>;
-pub type Effect<M> = Box<dyn State<'static, Message = M>>;
+// need a better name
+pub type EffectBorrow<'a, M> = Box<dyn State<'a, Message = M>>;
+pub type Effect<M> = EffectBorrow<'static, M>;
 
 // TODO need to be more general
 
-pub struct Adapt<F, M, A>(F, A, PhantomData<M>);
+// pub struct Adapt<F, M, A>(F, A, PhantomData<M>);
 
-impl<'a, F, M: 'static, A> State<'_> for Adapt<F, M, A>
-where
-    A: State<'a>,
-    F: FnMut(M) -> A::Message + 'static,
-{
-    type Message = M;
+// impl<'a, F, M: 'static, A> State<'_> for Adapt<F, M, A>
+// where
+//     A: State<'a>,
+//     F: FnMut(M) -> A::Message + 'static,
+// {
+//     type Message = M;
 
-    fn update(&mut self, message: Self::Message) {
-        self.1.update((self.0)(message))
-    }
-}
+//     fn update(&mut self, message: Self::Message) {
+//         self.1.update((self.0)(message))
+//     }
+// }
 
-pub trait AdaptFn<M, A> {
-    fn then(self, actor: A) -> Adapt<Self, M, A>
-    where
-        Self: Sized;
-}
+// pub trait AdaptFn<M, A> {
+//     fn then(self, actor: A) -> Adapt<Self, M, A>
+//     where
+//         Self: Sized;
+// }
 
-impl<'a, F, M, A> AdaptFn<M, A> for F
-where
-    A: State<'a>,
-    F: FnMut(M) -> A::Message,
-{
-    fn then(self, actor: A) -> Adapt<Self, M, A>
-    where
-        Self: Sized,
-    {
-        Adapt(self, actor, PhantomData)
-    }
-}
+// impl<'a, F, M, A> AdaptFn<M, A> for F
+// where
+//     A: State<'a>,
+//     F: FnMut(M) -> A::Message,
+// {
+//     fn then(self, actor: A) -> Adapt<Self, M, A>
+//     where
+//         Self: Sized,
+//     {
+//         Adapt(self, actor, PhantomData)
+//     }
+// }

@@ -1,8 +1,8 @@
-use std::{net::SocketAddr, sync::Arc};
+use std::{net::SocketAddr, ops::Range, sync::Arc};
 
 use bincode::Options;
-use larlis_core::{actor::AdaptFn, route, App};
-use larlis_unreplicated::Replica;
+use larlis_core::{route, App};
+use larlis_unreplicated::{Replica, Reply};
 use tokio::{net::UdpSocket, select, signal::ctrl_c};
 
 #[tokio::main]
@@ -18,16 +18,29 @@ impl App for Null {
     }
 }
 
+async fn run_clients(route: route::ClientTable, indexes: Range<usize>) {}
+
 async fn run_replica(route: route::ClientTable) {
     let socket = Arc::new(UdpSocket::bind("0.0.0.0:49999").await.unwrap());
-    let outgress = (move |(client_id, reply)| {
-        (
-            route.lookup_addr(&client_id),
-            bincode::options().serialize(&reply).unwrap(),
-        )
-    })
-    .then(larlis_udp::Out(socket.clone()));
-    let app = larlis_unreplicated::App(Null, Box::new(outgress));
+
+    struct AppOut(larlis_udp::Out, route::ClientTable);
+    impl larlis_core::actor::State<'_> for AppOut {
+        type Message = (u32, Reply);
+
+        fn update(&mut self, message: Self::Message) {
+            let (client_id, reply) = message;
+            let message = (
+                self.1.lookup_addr(&client_id),
+                bincode::options().serialize(&reply).unwrap(),
+            );
+            self.0.update(message)
+        }
+    }
+
+    let app = larlis_unreplicated::App(
+        Null,
+        Box::new(AppOut(larlis_udp::Out(socket.clone()), route)),
+    );
 
     struct De(Replica);
     impl<'a> larlis_core::actor::State<'a> for De {
@@ -50,4 +63,7 @@ async fn run_replica(route: route::ClientTable) {
         _ = ingress.start() => unreachable!(),
         result = ctrl_c() => result.unwrap(),
     }
+
+    // print some stats if needed
+    let _replica = ingress.into_actor().0;
 }

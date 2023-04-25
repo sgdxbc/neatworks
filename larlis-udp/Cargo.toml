@@ -1,10 +1,10 @@
 [package]
-name = "larlis_udp"
+name = "larlis-udp"
 version = "0.1.0"
 edition = "2021"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-larlis_core = { version = "0.1.0", path = "../larlis_core" }
+larlis-core = { version = "0.1.0", path = "../larlis-core" }
 tokio = { version = "1.27.0", features = ["net", "rt"] }

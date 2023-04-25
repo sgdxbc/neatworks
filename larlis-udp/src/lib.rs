@@ -13,6 +13,10 @@ impl<A> In<A> {
         Self { socket, actor }
     }
 
+    pub fn into_actor(self) -> A {
+        self.actor
+    }
+
     pub async fn start(&mut self)
     where
         A: for<'a> actor::State<'a, Message = (SocketAddr, &'a [u8])>,
