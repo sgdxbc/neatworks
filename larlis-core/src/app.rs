@@ -1,3 +1,5 @@
+use std::marker::PhantomData;
+
 use crate::actor::State;
 
 pub trait PureState<'input> {
@@ -13,6 +15,26 @@ pub trait PureState<'input> {
         Self: Sized,
     {
         Install(self, state)
+    }
+}
+
+pub struct Closure<F, I, O>(F, PhantomData<(I, O)>);
+
+impl<F, I, O> From<F> for Closure<F, I, O> {
+    fn from(value: F) -> Self {
+        Self(value, PhantomData)
+    }
+}
+
+impl<F, I, O> PureState<'_> for Closure<F, I, O>
+where
+    F: FnMut(I) -> O,
+{
+    type Input = I;
+    type Output<'o> = O where Self: 'o;
+
+    fn update(&mut self, input: Self::Input) -> Self::Output<'_> {
+        (self.0)(input)
     }
 }
 

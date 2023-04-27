@@ -5,7 +5,7 @@ use tokio::{net::UdpSocket, spawn};
 
 pub struct In<A> {
     pub socket: Arc<UdpSocket>,
-    pub actor: A,
+    pub state: A,
 }
 
 impl<A> In<A> {
@@ -16,7 +16,7 @@ impl<A> In<A> {
         let mut buf = vec![0; 65536];
         loop {
             let (len, remote) = self.socket.recv_from(&mut buf).await.unwrap();
-            self.actor.update((remote, &buf[..len]))
+            self.state.update((remote, &buf[..len]))
         }
     }
 }
