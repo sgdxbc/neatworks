@@ -1,5 +1,6 @@
 [workspace]
-members = ["larlis-*", "larlis/*"]
+# members = ["larlis-*", "larlis/*"]
+members = ["larlis-*"]
 
 [profile.dev]
 panic = "abort"

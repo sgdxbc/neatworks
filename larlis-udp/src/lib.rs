@@ -4,19 +4,11 @@ use larlis_core::actor;
 use tokio::{net::UdpSocket, spawn};
 
 pub struct In<A> {
-    socket: Arc<UdpSocket>,
-    actor: A,
+    pub socket: Arc<UdpSocket>,
+    pub actor: A,
 }
 
 impl<A> In<A> {
-    pub fn new(socket: Arc<UdpSocket>, actor: A) -> Self {
-        Self { socket, actor }
-    }
-
-    pub fn into_actor(self) -> A {
-        self.actor
-    }
-
     pub async fn start(&mut self)
     where
         A: for<'a> actor::State<'a, Message = (SocketAddr, &'a [u8])>,

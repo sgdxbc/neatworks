@@ -1,17 +1,17 @@
-use std::any::Any;
+use tokio::sync::mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender};
 
-use tokio::{
-    spawn,
-    sync::mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender},
-    task::JoinHandle,
-};
-
-pub trait State<'a>: Any {
+pub trait State<'message> {
     type Message;
 
     fn update(&mut self, message: Self::Message);
 }
 
+/// Lifetime-erasured version of `State<'static>`
+///
+/// Do not implement this, instead, implement `State<'static>` (or better,
+/// implement `State<'_>`) and get this through blacket imeplementation.
+/// The propose of this trait is to solve some tricky higher rank lifetime
+/// error.
 pub trait StateStatic {
     type Message;
 
@@ -26,51 +26,15 @@ impl<A: State<'static>> StateStatic for A {
     }
 }
 
-#[derive(Debug)]
-pub struct Detached<A: StateStatic> {
-    inbox: (UnboundedSender<A::Message>, UnboundedReceiver<A::Message>),
-    actor: A,
+pub struct Drive<M> {
+    sender: UnboundedSender<M>,
+    receiver: UnboundedReceiver<M>,
 }
 
-#[derive(Debug)]
-pub struct Inbox<M>(UnboundedSender<M>);
+#[derive(Clone)]
+pub struct DriveState<M>(UnboundedSender<M>);
 
-impl<M> Clone for Inbox<M> {
-    fn clone(&self) -> Self {
-        Self(self.0.clone())
-    }
-}
-
-impl<A: StateStatic> From<A> for Detached<A> {
-    fn from(value: A) -> Self {
-        Self {
-            inbox: unbounded_channel(),
-            actor: value,
-        }
-    }
-}
-
-impl<A: StateStatic> Detached<A> {
-    pub fn inbox(&self) -> Inbox<A::Message> {
-        Inbox(self.inbox.0.clone())
-    }
-
-    pub fn start(mut self) -> JoinHandle<A>
-    where
-        A: Send + 'static,
-        A::Message: Send,
-    {
-        drop(self.inbox.0);
-        spawn(async move {
-            while let Some(message) = self.inbox.1.recv().await {
-                self.actor.update(message)
-            }
-            self.actor
-        })
-    }
-}
-
-impl<'a, M: 'static> State<'a> for Inbox<M> {
+impl<M> State<'_> for DriveState<M> {
     type Message = M;
 
     fn update(&mut self, message: Self::Message) {
@@ -80,41 +44,26 @@ impl<'a, M: 'static> State<'a> for Inbox<M> {
     }
 }
 
-// need a better name
-pub type EffectBorrow<'a, M> = Box<dyn State<'a, Message = M>>;
-pub type Effect<M> = EffectBorrow<'static, M>;
+impl<M> Default for Drive<M> {
+    fn default() -> Self {
+        let (sender, receiver) = unbounded_channel();
+        Self { sender, receiver }
+    }
+}
 
-// TODO need to be more general
+impl<M> Drive<M> {
+    pub fn state(&self) -> DriveState<M> {
+        DriveState(self.sender.clone())
+    }
 
-// pub struct Adapt<F, M, A>(F, A, PhantomData<M>);
+    pub async fn recv(&mut self) -> Option<M> {
+        self.receiver.recv().await
+    }
 
-// impl<'a, F, M: 'static, A> State<'_> for Adapt<F, M, A>
-// where
-//     A: State<'a>,
-//     F: FnMut(M) -> A::Message + 'static,
-// {
-//     type Message = M;
-
-//     fn update(&mut self, message: Self::Message) {
-//         self.1.update((self.0)(message))
-//     }
-// }
-
-// pub trait AdaptFn<M, A> {
-//     fn then(self, actor: A) -> Adapt<Self, M, A>
-//     where
-//         Self: Sized;
-// }
-
-// impl<'a, F, M, A> AdaptFn<M, A> for F
-// where
-//     A: State<'a>,
-//     F: FnMut(M) -> A::Message,
-// {
-//     fn then(self, actor: A) -> Adapt<Self, M, A>
-//     where
-//         Self: Sized,
-//     {
-//         Adapt(self, actor, PhantomData)
-//     }
-// }
+    pub async fn run(mut self, state: &mut impl State<'_, Message = M>) {
+        drop(self.sender);
+        while let Some(message) = self.receiver.recv().await {
+            state.update(message)
+        }
+    }
+}

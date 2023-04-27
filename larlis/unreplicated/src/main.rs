@@ -13,7 +13,7 @@ async fn main() {
 struct Null;
 
 impl App for Null {
-    fn execute(&mut self, _: u32, _: &[u8]) -> Vec<u8> {
+    fn update(&mut self, _: u32, _: &[u8]) -> Vec<u8> {
         Default::default()
     }
 }
@@ -57,7 +57,10 @@ async fn run_replica(route: route::ClientTable) {
     }
 
     let replica = De(Replica::new(Box::new(app)));
-    let mut ingress = larlis_udp::In::new(socket, replica);
+    let mut ingress = larlis_udp::In {
+        socket,
+        actor: replica,
+    };
 
     select! {
         _ = ingress.start() => unreachable!(),
@@ -65,5 +68,5 @@ async fn run_replica(route: route::ClientTable) {
     }
 
     // print some stats if needed
-    let _replica = ingress.into_actor().0;
+    let _replica = ingress.actor.0;
 }
