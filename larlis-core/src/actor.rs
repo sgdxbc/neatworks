@@ -1,3 +1,5 @@
+use std::mem::replace;
+
 use tokio::sync::mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender};
 
 pub trait State<'message> {
@@ -12,19 +14,19 @@ pub trait State<'message> {
 /// implement `State<'_>`) and get this through blacket imeplementation.
 /// The propose of this trait is to solve some tricky higher rank lifetime
 /// error.
-pub trait StateStatic {
-    type Message;
+// pub trait StateStatic {
+//     type Message;
 
-    fn update(&mut self, message: Self::Message);
-}
+//     fn update(&mut self, message: Self::Message);
+// }
 
-impl<A: State<'static>> StateStatic for A {
-    type Message = <A as State<'static>>::Message;
+// impl<A: State<'static>> StateStatic for A {
+//     type Message = <A as State<'static>>::Message;
 
-    fn update(&mut self, message: Self::Message) {
-        <A as State<'static>>::update(self, message)
-    }
-}
+//     fn update(&mut self, message: Self::Message) {
+//         <A as State<'static>>::update(self, message)
+//     }
+// }
 
 pub struct Drive<M> {
     sender: UnboundedSender<M>,
@@ -57,7 +59,15 @@ impl<M> Drive<M> {
     }
 
     pub async fn recv(&mut self) -> Option<M> {
-        self.receiver.recv().await
+        // may need rethinking
+        let sender = replace(&mut self.sender, unbounded_channel().0);
+        let weak_sender = sender.downgrade();
+        drop(sender);
+        let message = self.receiver.recv().await;
+        if let Some(sender) = weak_sender.upgrade() {
+            self.sender = sender;
+        }
+        message
     }
 
     pub async fn run(mut self, state: &mut impl State<'_, Message = M>) {
