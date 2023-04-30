@@ -1,8 +1,12 @@
-use std::{net::SocketAddr, ops::Range, sync::Arc};
+use std::{marker::PhantomData, net::SocketAddr, ops::Range, sync::Arc};
 
 use bincode::Options;
-use larlis_core::{route, App};
+use larlis_core::{
+    app::{Closure, PureState},
+    route, App,
+};
 use larlis_unreplicated::{Replica, Reply};
+use serde::de::DeserializeOwned;
 use tokio::{net::UdpSocket, select, signal::ctrl_c};
 
 #[tokio::main]
@@ -15,6 +19,25 @@ struct Null;
 impl App for Null {
     fn update(&mut self, _: u32, _: &[u8]) -> Vec<u8> {
         Default::default()
+    }
+}
+
+struct De<M>(PhantomData<M>);
+
+impl<'i, M> PureState<'i> for De<M>
+where
+    M: DeserializeOwned,
+{
+    type Input = (SocketAddr, &'i [u8]);
+    type Output<'output> = (SocketAddr, M) where Self: 'output;
+
+    fn update(&mut self, input: Self::Input) -> Self::Output<'_> {
+        let (addr, buf) = input;
+        let message = bincode::options()
+            .allow_trailing_bytes()
+            .deserialize(buf)
+            .unwrap();
+        (addr, message)
     }
 }
 
@@ -37,29 +60,13 @@ async fn run_replica(route: route::ClientTable) {
         }
     }
 
-    let app = larlis_unreplicated::App(
-        Null,
-        Box::new(AppOut(larlis_udp::Out(socket.clone()), route)),
-    );
+    let app = larlis_unreplicated::App(Null)
+        .install(AppOut(larlis_udp::Out(socket.clone()), Default::default()));
 
-    struct De(Replica);
-    impl<'a> larlis_core::actor::State<'a> for De {
-        type Message = (SocketAddr, &'a [u8]);
-
-        fn update(&mut self, message: Self::Message) {
-            let (_, buf) = message;
-            let message = bincode::options()
-                .allow_trailing_bytes()
-                .deserialize(buf)
-                .unwrap();
-            self.0.update(message)
-        }
-    }
-
-    let replica = De(Replica::new(Box::new(app)));
+    let replica = De(PhantomData).install(Closure::from(|(_, m)| m).install(Replica::new(app)));
     let mut ingress = larlis_udp::In {
         socket,
-        actor: replica,
+        state: replica,
     };
 
     select! {
@@ -68,5 +75,5 @@ async fn run_replica(route: route::ClientTable) {
     }
 
     // print some stats if needed
-    let _replica = ingress.actor.0;
+    let _replica = ingress.state.1 .1;
 }

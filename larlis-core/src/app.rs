@@ -53,7 +53,7 @@ impl<'i, A: App> PureState<'i> for A {
 }
 
 // the name is too abstract...
-pub struct Install<A, S>(A, S);
+pub struct Install<A, S>(pub A, pub S);
 
 impl<'i, A, S> State<'i> for Install<A, S>
 where

@@ -9,19 +9,19 @@ pub enum Message {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Result(Vec<u8>);
+pub struct Result(pub Vec<u8>);
 
-pub struct Client {
+pub struct Client<O, R> {
     id: u32,
     request_num: u32,
     ticked: bool,
     op: Option<Vec<u8>>,
-    outgress: actor::Effect<Request>,
-    result: actor::Effect<Result>,
+    outgress: O,
+    result: R,
 }
 
-impl Client {
-    pub fn new(id: u32, outgress: actor::Effect<Request>, result: actor::Effect<Result>) -> Self {
+impl<O, R> Client<O, R> {
+    pub fn new(id: u32, outgress: O, result: R) -> Self {
         Self {
             id,
             request_num: 0,
@@ -33,7 +33,11 @@ impl Client {
     }
 }
 
-impl actor::State<'_> for Client {
+impl<O, R> actor::State<'_> for Client<O, R>
+where
+    O: for<'m> actor::State<'m, Message = Request>,
+    R: for<'m> actor::State<'m, Message = Result>,
+{
     type Message = Message;
 
     fn update(&mut self, message: Self::Message) {
@@ -45,7 +49,11 @@ impl actor::State<'_> for Client {
     }
 }
 
-impl Client {
+impl<O, R> Client<O, R>
+where
+    O: for<'m> actor::State<'m, Message = Request>,
+    R: for<'m> actor::State<'m, Message = Result>,
+{
     fn invoke(&mut self, op: Vec<u8>) {
         assert!(self.op.is_none());
         self.request_num += 1;

@@ -9,18 +9,21 @@ pub struct Upcall {
     op: Vec<u8>,
 }
 
-pub struct Replica {
+pub struct Replica<U> {
     op_num: u32,
-    upcall: actor::Effect<Upcall>,
+    upcall: U,
 }
 
-impl Replica {
-    pub fn new(upcall: actor::Effect<Upcall>) -> Self {
+impl<U> Replica<U> {
+    pub fn new(upcall: U) -> Self {
         Self { op_num: 0, upcall }
     }
 }
 
-impl actor::State<'_> for Replica {
+impl<U> actor::State<'_> for Replica<U>
+where
+    U: for<'m> actor::State<'m, Message = Upcall>,
+{
     type Message = Request;
 
     fn update(&mut self, message: Self::Message) {
@@ -37,14 +40,14 @@ impl actor::State<'_> for Replica {
 
 pub struct App<A>(pub A);
 
-impl<A> app::SyncState<'_> for App<A>
+impl<A> app::PureState<'_> for App<A>
 where
     A: larlis_core::App + 'static,
 {
     type Input = Upcall;
-    type Output = (u32, Reply);
+    type Output<'a> = (u32, Reply);
 
-    fn update(&mut self, input: Self::Input) -> Self::Output {
+    fn update(&mut self, input: Self::Input) -> Self::Output<'_> {
         let result = self.0.update(input.op_num, &input.op);
         let message = Reply {
             request_num: input.request_num,
