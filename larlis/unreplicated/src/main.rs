@@ -1,12 +1,12 @@
-use std::{marker::PhantomData, net::SocketAddr, ops::Range, sync::Arc};
+use std::{net::SocketAddr, ops::Range, sync::Arc};
 
-use bincode::Options;
+use larlis_bincode::{de, ser};
 use larlis_core::{
+    actor::State,
     app::{Closure, PureState},
     route, App,
 };
 use larlis_unreplicated::{Replica, Reply};
-use serde::de::DeserializeOwned;
 use tokio::{net::UdpSocket, select, signal::ctrl_c};
 
 #[tokio::main]
@@ -22,48 +22,29 @@ impl App for Null {
     }
 }
 
-struct De<M>(PhantomData<M>);
-
-impl<'i, M> PureState<'i> for De<M>
-where
-    M: DeserializeOwned,
-{
-    type Input = (SocketAddr, &'i [u8]);
-    type Output<'output> = (SocketAddr, M) where Self: 'output;
-
-    fn update(&mut self, input: Self::Input) -> Self::Output<'_> {
-        let (addr, buf) = input;
-        let message = bincode::options()
-            .allow_trailing_bytes()
-            .deserialize(buf)
-            .unwrap();
-        (addr, message)
-    }
-}
-
 async fn run_clients(route: route::ClientTable, indexes: Range<usize>) {}
 
 async fn run_replica(route: route::ClientTable) {
     let socket = Arc::new(UdpSocket::bind("0.0.0.0:49999").await.unwrap());
 
-    struct AppOut(larlis_udp::Out, route::ClientTable);
-    impl larlis_core::actor::State<'_> for AppOut {
+    struct AppOut<O>(O, route::ClientTable);
+    impl<O: for<'m> State<'m, Message = (SocketAddr, Reply)>> larlis_core::actor::State<'_>
+        for AppOut<O>
+    {
         type Message = (u32, Reply);
 
         fn update(&mut self, message: Self::Message) {
             let (client_id, reply) = message;
-            let message = (
-                self.1.lookup_addr(&client_id),
-                bincode::options().serialize(&reply).unwrap(),
-            );
-            self.0.update(message)
+            self.0.update((self.1.lookup_addr(&client_id), reply))
         }
     }
 
-    let app = larlis_unreplicated::App(Null)
-        .install(AppOut(larlis_udp::Out(socket.clone()), Default::default()));
+    let app = larlis_unreplicated::App(Null).install(AppOut(
+        ser().install(larlis_udp::Out(socket.clone())),
+        Default::default(), // TODO
+    ));
 
-    let replica = De(PhantomData).install(Closure::from(|(_, m)| m).install(Replica::new(app)));
+    let replica = de().install(Closure::from(|(_, m)| m).install(Replica::new(app)));
     let mut ingress = larlis_udp::In {
         socket,
         state: replica,

@@ -20,9 +20,15 @@ pub trait PureState<'input> {
 
 pub struct Closure<F, I, O>(F, PhantomData<(I, O)>);
 
+impl<F, I, O> Closure<F, I, O> {
+    pub const fn new(f: F) -> Self {
+        Self(f, PhantomData)
+    }
+}
+
 impl<F, I, O> From<F> for Closure<F, I, O> {
     fn from(value: F) -> Self {
-        Self(value, PhantomData)
+        Self::new(value)
     }
 }
 
