@@ -8,25 +8,7 @@ pub trait State<'message> {
     fn update(&mut self, message: Self::Message);
 }
 
-/// Lifetime-erasured version of `State<'static>`
-///
-/// Do not implement this, instead, implement `State<'static>` (or better,
-/// implement `State<'_>`) and get this through blacket imeplementation.
-/// The propose of this trait is to solve some tricky higher rank lifetime
-/// error.
-// pub trait StateStatic {
-//     type Message;
-
-//     fn update(&mut self, message: Self::Message);
-// }
-
-// impl<A: State<'static>> StateStatic for A {
-//     type Message = <A as State<'static>>::Message;
-
-//     fn update(&mut self, message: Self::Message) {
-//         <A as State<'static>>::update(self, message)
-//     }
-// }
+pub trait SharedClone: Clone {}
 
 pub struct Drive<M> {
     sender: UnboundedSender<M>,
@@ -40,6 +22,8 @@ impl<M> Clone for DriveState<M> {
         Self(self.0.clone())
     }
 }
+
+impl<M> SharedClone for DriveState<M> {}
 
 impl<M> State<'_> for DriveState<M> {
     type Message = M;

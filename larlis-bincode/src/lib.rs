@@ -1,10 +1,23 @@
 use std::{marker::PhantomData, net::SocketAddr};
 
 use bincode::Options;
-use larlis_core::app::{Closure, PureState};
+use larlis_core::{
+    actor::SharedClone,
+    app::{Closure, PureState},
+};
 use serde::{de::DeserializeOwned, Serialize};
 
 struct De<M>(PhantomData<M>);
+
+impl<M> Clone for De<M> {
+    fn clone(&self) -> Self {
+        Self(PhantomData)
+    }
+}
+
+impl<M> Copy for De<M> {}
+
+impl<M> SharedClone for De<M> {}
 
 impl<'i, M> PureState<'i> for De<M>
 where
@@ -26,6 +39,7 @@ where
 
 pub const fn de<M>(
 ) -> impl for<'i, 'o> PureState<'i, Input = (SocketAddr, &'i [u8]), Output<'o> = (SocketAddr, M)>
+       + SharedClone
 where
     M: DeserializeOwned + 'static,
 {

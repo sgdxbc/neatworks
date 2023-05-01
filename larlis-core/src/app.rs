@@ -1,6 +1,6 @@
 use std::marker::PhantomData;
 
-use crate::actor::State;
+use crate::actor::{SharedClone, State};
 
 pub trait PureState<'input> {
     type Input;
@@ -44,6 +44,17 @@ where
     }
 }
 
+impl<F, I, O> Clone for Closure<F, I, O>
+where
+    F: Clone,
+{
+    fn clone(&self) -> Self {
+        Self(self.0.clone(), PhantomData)
+    }
+}
+
+impl<F, I, O> SharedClone for Closure<F, I, O> where F: Fn(I) -> O + Clone {}
+
 pub trait App {
     fn update(&mut self, op_num: u32, op: &[u8]) -> Vec<u8>;
 }
@@ -59,6 +70,7 @@ impl<'i, A: App> PureState<'i> for A {
 }
 
 // the name is too abstract...
+#[derive(Debug, Clone)]
 pub struct Install<A, S>(pub A, pub S);
 
 impl<'i, A, S> State<'i> for Install<A, S>
@@ -71,4 +83,11 @@ where
     fn update(&mut self, message: Self::Message) {
         self.1.update(self.0.update(message))
     }
+}
+
+impl<A, S> SharedClone for Install<A, S>
+where
+    A: SharedClone,
+    S: SharedClone,
+{
 }
