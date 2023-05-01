@@ -33,8 +33,13 @@ pub struct Drive<M> {
     receiver: UnboundedReceiver<M>,
 }
 
-#[derive(Clone)]
 pub struct DriveState<M>(UnboundedSender<M>);
+
+impl<M> Clone for DriveState<M> {
+    fn clone(&self) -> Self {
+        Self(self.0.clone())
+    }
+}
 
 impl<M> State<'_> for DriveState<M> {
     type Message = M;

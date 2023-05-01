@@ -7,7 +7,7 @@ pub struct In<A> {
     pub socket: Arc<UdpSocket>,
     pub state: A,
 }
-
+    
 impl<A> In<A> {
     pub async fn start(&mut self)
     where
