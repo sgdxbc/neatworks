@@ -8,7 +8,31 @@ pub trait State<'message> {
     fn update(&mut self, message: Self::Message);
 }
 
+impl<'m, T: State<'m>> State<'m> for &mut T {
+    type Message = T::Message;
+
+    fn update(&mut self, message: Self::Message) {
+        T::update(self, message)
+    }
+}
+
+impl<'m, T: State<'m>> State<'m> for Box<T> {
+    type Message = T::Message;
+
+    fn update(&mut self, message: Self::Message) {
+        T::update(self, message)
+    }
+}
+
 pub trait SharedClone: Clone {}
+
+impl<T: SharedClone> SharedClone for &T {}
+
+impl<T: SharedClone> SharedClone for Box<T> {}
+
+impl<T> SharedClone for std::rc::Rc<T> {}
+
+impl<T> SharedClone for std::sync::Arc<T> {}
 
 pub struct Drive<M> {
     sender: UnboundedSender<M>,

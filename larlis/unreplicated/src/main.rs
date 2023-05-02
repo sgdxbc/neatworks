@@ -44,10 +44,10 @@ async fn run_replica(route: route::ClientTable) {
         Default::default(), // TODO
     ));
 
-    let replica = de().install(Closure::from(|(_, m)| m).install(Replica::new(app)));
+    let mut replica = Replica::new(app);
     let mut ingress = larlis_udp::In {
         socket,
-        state: replica,
+        state: de().install(Closure::from(|(_, m)| m).install(&mut replica)),
     };
 
     select! {
@@ -56,5 +56,5 @@ async fn run_replica(route: route::ClientTable) {
     }
 
     // print some stats if needed
-    let _replica = ingress.state.1 .1;
+    let _replica = replica;
 }
