@@ -35,7 +35,7 @@ pub struct Transport<S> {
 }
 
 impl<S> Transport<S> {
-    pub fn new(addr: SocketAddr, state: S) -> Self {
+    pub fn bind(addr: SocketAddr, state: S) -> Self {
         Self {
             addr,
             egress: Default::default(),
@@ -137,7 +137,7 @@ pub struct Accept<S> {
 }
 
 impl<S> Accept<S> {
-    pub fn new(addr: SocketAddr, state: S) -> Self {
+    pub fn bind(addr: SocketAddr, state: S) -> Self {
         let socket = TcpSocket::new_v4().unwrap();
         socket.set_reuseaddr(true).unwrap(); //
         socket.bind(addr).unwrap();

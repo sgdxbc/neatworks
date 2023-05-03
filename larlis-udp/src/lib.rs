@@ -7,8 +7,22 @@ pub struct In<A> {
     pub socket: Arc<UdpSocket>,
     pub state: A,
 }
-    
+
 impl<A> In<A> {
+    pub async fn bind(addr: SocketAddr, state: A) -> Self {
+        Self {
+            socket: Arc::new(UdpSocket::bind(addr).await.unwrap()),
+            state,
+        }
+    }
+
+    pub fn new(out: &Out, state: A) -> Self {
+        Self {
+            socket: out.0.clone(),
+            state,
+        }
+    }
+
     pub async fn start(&mut self)
     where
         A: for<'a> actor::State<'a, Message = (SocketAddr, &'a [u8])>,
@@ -21,7 +35,14 @@ impl<A> In<A> {
     }
 }
 
+#[derive(Debug, Clone)]
 pub struct Out(pub Arc<UdpSocket>);
+
+impl Out {
+    pub async fn bind(addr: SocketAddr) -> Self {
+        Self(Arc::new(UdpSocket::bind(addr).await.unwrap()))
+    }
+}
 
 impl actor::State<'_> for Out {
     type Message = (SocketAddr, Vec<u8>);

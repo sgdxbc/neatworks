@@ -1,4 +1,4 @@
-use std::{iter::repeat_with, net::SocketAddr, sync::Arc};
+use std::{iter::repeat_with, net::SocketAddr};
 
 use larlis_barrier::{Message, Service};
 use larlis_bincode::{de, ser};
@@ -7,30 +7,21 @@ use larlis_core::{
     app::{Closure, PureState},
 };
 
-use tokio::{net::UdpSocket, spawn};
+use tokio::spawn;
 
 type UserPayload = u16;
 
-async fn use_barrier(
-    socket: Arc<UdpSocket>,
-    service: SocketAddr,
-) -> larlis_barrier::Message<UserPayload> {
-    let local_message = socket.local_addr().unwrap().port();
-
+async fn use_barrier(addr: SocketAddr, service: SocketAddr) -> Message<UserPayload> {
     // 1. listen to barrier message
-    let mut message = Drive::default();
-    let state =
-        de().install(Closure::from(|x: (_, Message<UserPayload>)| x.1).install(message.state()));
-    let mut ingress = larlis_udp::In {
-        socket: socket.clone(),
-        state,
-    };
+    let mut message = Drive::<Message<UserPayload>>::default();
+    let state = de().install(Closure::from(|(_, message)| message).install(message.state()));
+    let out = larlis_udp::Out::bind(addr).await;
+    let local_message = out.0.local_addr().unwrap().port();
+    let mut ingress = larlis_udp::In::new(&out, state);
     let ingress = spawn(async move { ingress.start().await });
 
     // 2. tx
-    ser()
-        .install(larlis_udp::Out(socket))
-        .update((service, local_message));
+    ser().install(out).update((service, local_message));
 
     // 3. wait for rx
     let mut message = message.recv().await.unwrap();
@@ -39,15 +30,16 @@ async fn use_barrier(
     message
 }
 
-async fn provide_barrier(socket: Arc<UdpSocket>, count: usize) {
-    let egress = ser().install(larlis_udp::Out(socket.clone()));
+async fn provide_barrier(addr: SocketAddr, count: usize) {
+    let out = larlis_udp::Out::bind(addr).await;
+    let egress = ser().install(out.clone());
     let mut finished = Drive::default();
     let state = de().install(Service::<UserPayload, _, _>::new(
         egress,
         finished.state(),
         count,
     ));
-    let mut ingress = larlis_udp::In { socket, state };
+    let mut ingress = larlis_udp::In::new(&out, state);
     let ingress = spawn(async move { ingress.start().await });
     finished.recv().await.unwrap();
     ingress.abort();
@@ -57,17 +49,15 @@ async fn provide_barrier(socket: Arc<UdpSocket>, count: usize) {
 async fn sync_two() {
     const N: usize = 2;
 
-    let service_socket = Arc::new(UdpSocket::bind("0.0.0.0:0").await.unwrap());
-    let service_addr = service_socket.local_addr().unwrap();
-    println!("service {service_addr}");
-    let service = spawn(provide_barrier(service_socket, N));
+    let service_addr = SocketAddr::from(([0, 0, 0, 0], 60000));
+    let service = spawn(provide_barrier(service_addr, N));
 
     let tasks = Vec::from_iter(
         repeat_with(|| {
-            spawn(async move {
-                let socket = Arc::new(UdpSocket::bind("0.0.0.0:0").await.unwrap());
-                use_barrier(socket, service_addr).await
-            })
+            spawn(use_barrier(
+                SocketAddr::from(([0, 0, 0, 0], 0)),
+                service_addr,
+            ))
         })
         .take(N),
     );
