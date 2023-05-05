@@ -98,24 +98,28 @@ async fn use_barrier_tcp(addr: SocketAddr, service: SocketAddr) -> Message<UserP
 async fn provide_barrier_tcp(addr: SocketAddr, count: usize) {
     let app_drive = Drive::<(SocketAddr, UserPayload)>::default();
     let mut finished = Drive::<()>::default();
-    let disconnected_drive = Drive::<()>::default();
+    let disconnected = Drive::<()>::default();
 
     let listener = larlis_tcp::Listener::bind(addr);
     let mut dispatch = Dispatch::default();
+    let mut connections = Vec::new();
     for _ in 0..count {
         let mut connection = listener
             .accept(
                 de::<UserPayload>().install(app_drive.state()),
-                disconnected_drive.state(),
+                disconnected.state(),
             )
             .await;
         dispatch.insert_state(connection.remote_addr, connection.egress_state());
-        spawn(async move { connection.start().await });
+        connections.push(spawn(async move { connection.start().await }));
     }
     let app = Service::new(ser().install(dispatch), finished.state(), count);
 
     let app = spawn(async move { app_drive.run(app).await });
     finished.recv().await.unwrap();
+    for connection in connections {
+        connection.await.unwrap()
+    }
     app.await.unwrap() //
 }
 

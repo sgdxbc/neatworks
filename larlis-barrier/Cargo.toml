@@ -6,10 +6,12 @@ edition = "2021"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
+larlis-bincode = { version = "0.1.0", path = "../larlis-bincode" }
 larlis-core = { version = "0.1.0", path = "../larlis-core" }
+larlis-tcp = { version = "0.1.0", path = "../larlis-tcp" }
+serde = "1.0.162"
+tokio = { version = "1.28.0", features = ["rt"] }
 
 [dev-dependencies]
-larlis-bincode = { path = "../larlis-bincode" }
-larlis-tcp = { path = "../larlis-tcp" }
 larlis-udp = { path = "../larlis-udp" }
-tokio = { version = "1.28.0", features = ["rt", "macros"] }
+tokio = { version = "1.28.0", features = ["macros"] }

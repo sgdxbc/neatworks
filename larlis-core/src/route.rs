@@ -43,4 +43,12 @@ impl<K, I> Table<K, I> {
     {
         self.routes[id]
     }
+
+    pub fn len(&self) -> usize {
+        self.identities.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.identities.is_empty()
+    }
 }
