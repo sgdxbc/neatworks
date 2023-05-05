@@ -10,5 +10,6 @@ larlis-core = { version = "0.1.0", path = "../larlis-core" }
 
 [dev-dependencies]
 larlis-bincode = { path = "../larlis-bincode" }
+larlis-tcp = { path = "../larlis-tcp" }
 larlis-udp = { path = "../larlis-udp" }
 tokio = { version = "1.28.0", features = ["rt", "macros"] }

@@ -14,6 +14,7 @@ pub type Message = (SocketAddr, Vec<u8>);
 pub enum TransportMessage {
     Accept(SocketAddr, TcpStream),
     Send(SocketAddr, Vec<u8>),
+    Close(SocketAddr),
 }
 
 impl From<(SocketAddr, Vec<u8>)> for TransportMessage {
@@ -127,6 +128,10 @@ where
                     .send(buf)
                     .unwrap();
             }
+
+            TransportMessage::Close(remote) => {
+                self.egress.remove(&remote); // assert exist and closed?
+            }
         }
     }
 }
@@ -155,5 +160,85 @@ impl<S> Accept<S> {
             let (stream, remote) = self.listener.accept().await.unwrap();
             self.state.update(TransportMessage::Accept(remote, stream));
         }
+    }
+}
+
+#[derive(Debug)]
+pub struct Connection<S> {
+    pub stream: TcpStream,
+    pub state: S,
+    egress: (UnboundedSender<Vec<u8>>, UnboundedReceiver<Vec<u8>>),
+}
+
+#[derive(Debug, Clone)]
+pub struct ConnectionOut(UnboundedSender<Vec<u8>>);
+
+impl<S> Connection<S> {
+    pub fn new(stream: TcpStream, state: S) -> Self {
+        Self {
+            stream,
+            state,
+            egress: unbounded_channel(),
+        }
+    }
+
+    pub async fn connect(local_addr: SocketAddr, remote_addr: SocketAddr, state: S) -> Self {
+        let socket = TcpSocket::new_v4().unwrap();
+        socket.set_reuseaddr(true).unwrap();
+        socket.bind(local_addr).unwrap();
+        Self::new(socket.connect(remote_addr).await.unwrap(), state)
+    }
+
+    pub fn egress_state(&self) -> ConnectionOut {
+        ConnectionOut(self.egress.0.clone())
+    }
+
+    pub async fn start(&mut self)
+    where
+        S: for<'m> State<'m, Message = &'m [u8]>,
+    {
+        let mut buf = vec![0; 65536]; //
+        loop {
+            select! {
+                len = self.stream.read_u32() => {
+                    let Ok(len) = len else {
+                        //
+                        return;
+                    };
+                    if self.stream.read_exact(&mut buf[..len as _]).await.is_err() {
+                        //
+                        return;
+                    }
+                    self.state.update(&buf[..len as _]);
+                }
+                message = self.egress.1.recv() => {
+                    let message = message.unwrap(); //
+                    if self.stream.write_u32(message.len() as _).await.is_err()
+                        || self.stream.write_all(&message).await.is_err()
+                        || self.stream.flush().await.is_err()
+                    {
+                        //
+                        return;
+                    }
+                }
+            }
+        }
+    }
+}
+
+#[derive(Debug)]
+pub struct Listener(pub TcpListener);
+
+impl Listener {
+    pub fn bind(addr: SocketAddr) -> Self {
+        let socket = TcpSocket::new_v4().unwrap();
+        socket.set_reuseaddr(true).unwrap();
+        socket.bind(addr).unwrap();
+        Self(socket.listen(4096).unwrap())
+    }
+
+    pub async fn accept<S>(&self, state: S) -> (SocketAddr, Connection<S>) {
+        let (stream, remote) = self.0.accept().await.unwrap();
+        (remote, Connection::new(stream, state))
     }
 }

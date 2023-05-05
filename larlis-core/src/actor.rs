@@ -83,7 +83,7 @@ impl<M> Drive<M> {
         message
     }
 
-    pub async fn run(mut self, state: &mut impl State<'_, Message = M>) {
+    pub async fn run(mut self, mut state: impl State<'_, Message = M>) {
         drop(self.sender);
         while let Some(message) = self.receiver.recv().await {
             state.update(message)
