@@ -164,29 +164,36 @@ impl<S> Accept<S> {
 }
 
 #[derive(Debug)]
-pub struct Connection<S> {
+pub struct Connection<S, D> {
     pub stream: TcpStream,
     pub state: S,
+    pub disconnected: D,
     egress: (UnboundedSender<Vec<u8>>, UnboundedReceiver<Vec<u8>>),
 }
 
 #[derive(Debug, Clone)]
 pub struct ConnectionOut(UnboundedSender<Vec<u8>>);
 
-impl<S> Connection<S> {
-    pub fn new(stream: TcpStream, state: S) -> Self {
+impl<S, D> Connection<S, D> {
+    pub fn new(stream: TcpStream, state: S, disconnected: D) -> Self {
         Self {
             stream,
             state,
+            disconnected,
             egress: unbounded_channel(),
         }
     }
 
-    pub async fn connect(local_addr: SocketAddr, remote_addr: SocketAddr, state: S) -> Self {
+    pub async fn connect(
+        local_addr: SocketAddr,
+        remote_addr: SocketAddr,
+        state: S,
+        finished: D,
+    ) -> Self {
         let socket = TcpSocket::new_v4().unwrap();
         socket.set_reuseaddr(true).unwrap();
         socket.bind(local_addr).unwrap();
-        Self::new(socket.connect(remote_addr).await.unwrap(), state)
+        Self::new(socket.connect(remote_addr).await.unwrap(), state, finished)
     }
 
     pub fn egress_state(&self) -> ConnectionOut {
@@ -196,6 +203,7 @@ impl<S> Connection<S> {
     pub async fn start(&mut self)
     where
         S: for<'m> State<'m, Message = &'m [u8]>,
+        D: for<'m> State<'m, Message = ()>,
     {
         let mut buf = vec![0; 65536]; //
         loop {
@@ -203,11 +211,11 @@ impl<S> Connection<S> {
                 len = self.stream.read_u32() => {
                     let Ok(len) = len else {
                         //
-                        return;
+                        break;
                     };
                     if self.stream.read_exact(&mut buf[..len as _]).await.is_err() {
                         //
-                        return;
+                        break;
                     }
                     self.state.update(&buf[..len as _]);
                 }
@@ -218,11 +226,12 @@ impl<S> Connection<S> {
                         || self.stream.flush().await.is_err()
                     {
                         //
-                        return;
+                        break;
                     }
                 }
             }
         }
+        self.disconnected.update(())
     }
 }
 
@@ -237,8 +246,8 @@ impl Listener {
         Self(socket.listen(4096).unwrap())
     }
 
-    pub async fn accept<S>(&self, state: S) -> (SocketAddr, Connection<S>) {
+    pub async fn accept<S, D>(&self, state: S, disconnected: D) -> (SocketAddr, Connection<S, D>) {
         let (stream, remote) = self.0.accept().await.unwrap();
-        (remote, Connection::new(stream, state))
+        (remote, Connection::new(stream, state, disconnected))
     }
 }
