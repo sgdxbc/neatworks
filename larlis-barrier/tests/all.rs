@@ -5,6 +5,7 @@ use larlis_bincode::{de, ser};
 use larlis_core::{
     actor::{Drive, State},
     app::{Closure, PureState},
+    Dispatch,
 };
 
 use tokio::spawn;
@@ -73,24 +74,24 @@ async fn sync_two() {
 }
 
 async fn provide_barrier_tcp(addr: SocketAddr, count: usize) {
-    let state_drive = Drive::<(SocketAddr, UserPayload)>::default();
-    let transport_drive = Drive::<larlis_tcp::TransportMessage>::default();
+    let app_drive = Drive::<(SocketAddr, UserPayload)>::default();
     let mut finished = Drive::<()>::default();
+    let disconnected_drive = Drive::<()>::default();
 
-    let transport =
-        larlis_tcp::Transport::bind(addr, de::<UserPayload>().install(state_drive.state()));
-    let state = Service::<UserPayload, _, _>::new(
-        ser::<Message<UserPayload>>()
-            .install(Closure::from(From::from).install(transport_drive.state())),
-        finished.state(),
-        count,
-    );
-    let mut accept = larlis_tcp::Accept::bind(addr, transport_drive.state());
+    let listener = larlis_tcp::Listener::bind(addr);
+    let mut dispatch = Dispatch::default();
+    for _ in 0..count {
+        let connection = listener
+            .accept(
+                de::<UserPayload>().install(app_drive.state()),
+                disconnected_drive.state(),
+            )
+            .await;
+        dispatch.insert_state(connection.remote_addr, connection.egress_state());
+    }
+    let app = Service::new(ser().install(dispatch), finished.state(), count);
 
-    let state = spawn(async move { state_drive.run(state).await });
-    let transport = spawn(async move { transport_drive.run(transport).await });
-    let accept = spawn(async move { accept.start().await });
-
+    let app = spawn(async move { app_drive.run(app).await });
     finished.recv().await.unwrap();
-    accept.abort();
+    app.await.unwrap() //
 }
