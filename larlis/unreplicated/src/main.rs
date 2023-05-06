@@ -1,9 +1,14 @@
-use std::{net::SocketAddr, ops::Range, sync::Arc};
+use std::{
+    net::SocketAddr,
+    sync::Arc,
+    time::{Duration, Instant},
+};
 
 use clap::Parser;
 use larlis_barrier::{provide_barrier, use_barrier};
 use larlis_bincode::{de, ser};
 use larlis_core::{
+    actor::{Drive, State},
     app::{Closure, PureState},
     route::{self, ClientTable},
     App,
@@ -11,7 +16,7 @@ use larlis_core::{
 use larlis_unreplicated::Replica;
 use rand::{rngs::StdRng, SeedableRng};
 use serde::{Deserialize, Serialize};
-use tokio::{net::UdpSocket, select, signal::ctrl_c};
+use tokio::{net::UdpSocket, select, signal::ctrl_c, spawn, time::sleep};
 
 struct Null;
 
@@ -21,9 +26,95 @@ impl App for Null {
     }
 }
 
-async fn run_clients(route: route::ClientTable, indexes: Range<usize>) {}
+struct Workload<I> {
+    latencies: Vec<Duration>,
+    outstanding_start: Instant,
+    invoke: I,
+}
 
-async fn run_replica(route: route::ClientTable) {
+impl<I> State<'_> for Workload<I>
+where
+    I: for<'m> State<'m, Message = larlis_unreplicated::client::Message>,
+{
+    type Message = larlis_unreplicated::client::Result;
+
+    fn update(&mut self, message: Self::Message) {
+        assert_eq!(
+            message,
+            larlis_unreplicated::client::Result(Default::default())
+        );
+        let now = Instant::now();
+        self.latencies.push(now - self.outstanding_start);
+        self.outstanding_start = now;
+        self.invoke
+            .update(larlis_unreplicated::client::Message::Invoke(
+                Default::default(),
+            ));
+    }
+}
+
+async fn run_clients(cli: Cli, route: route::ClientTable, replica_addr: SocketAddr) {
+    use larlis_unreplicated::client::Message;
+
+    let (Some(client_index), Some(client_count)) = (cli.client_index, cli.client_count) else {
+        unreachable!()
+    };
+    let mut clients = Vec::new();
+    let mut ingress_tasks = Vec::new();
+    for index in client_index..client_index + client_count {
+        let client_id = *route.identity(index);
+        let client_addr = route.lookup_addr(&client_id);
+        let client_drive = Drive::<Message>::default();
+        let egress = larlis_udp::Out::bind(client_addr).await;
+        let mut ingress = larlis_udp::In::new(
+            &egress,
+            de::<larlis_unreplicated::Reply>().install(
+                Closure::from(|(_, message): (SocketAddr, _)| Message::Handle(message))
+                    .install(client_drive.state()),
+            ),
+        );
+        let workload = Workload {
+            latencies: Default::default(),
+            outstanding_start: Instant::now(),
+            invoke: client_drive.state(),
+        };
+        let mut client = larlis_unreplicated::Client::new(
+            client_id,
+            Closure::from(move |message| (replica_addr, message)).install(ser().install(egress)),
+            workload,
+        );
+        clients.push(spawn(async move {
+            client.result.outstanding_start = Instant::now();
+            client_drive
+                .state()
+                .update(Message::Invoke(Default::default()));
+            client_drive.run(&mut client).await; // TODO tick
+            client
+        }));
+        ingress_tasks.push(spawn(async move { ingress.start().await }));
+    }
+
+    sleep(Duration::from_secs(cli.client_sec.unwrap())).await;
+
+    for ingress in ingress_tasks {
+        ingress.abort();
+    }
+    for (index, client) in (client_index..client_index + client_count).zip(clients) {
+        let client = client.await.unwrap(); //
+        let mut latencies = client.result.latencies;
+        latencies.sort();
+        println!(
+            "{index},{},{}",
+            latencies.len(),
+            latencies
+                .get(latencies.len() * 100 / 99)
+                .unwrap_or(&Duration::ZERO)
+                .as_secs_f64()
+        );
+    }
+}
+
+async fn run_replica(_cli: Cli, route: route::ClientTable) {
     let socket = Arc::new(UdpSocket::bind("0.0.0.0:60002").await.unwrap());
 
     let app = larlis_unreplicated::App(Null).install(
@@ -61,6 +152,8 @@ struct Cli {
     barrier_count: usize,
     #[clap(long)]
     barrier_addr: Option<SocketAddr>,
+    #[clap(long)]
+    client_sec: Option<u64>,
 }
 
 #[tokio::main]
@@ -103,9 +196,9 @@ async fn main() {
         }
     }
 
-    match (cli.client_index, cli.client_count) {
-        (Some(index), Some(count)) => run_clients(route, index..count).await,
-        (None, None) => run_replica(route).await,
-        _ => unimplemented!(),
+    if cli.client_index.is_some() {
+        run_clients(cli, route, replica.unwrap()).await;
+    } else {
+        run_replica(cli, route).await;
     }
 }

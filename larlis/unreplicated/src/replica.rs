@@ -11,7 +11,7 @@ pub struct Upcall {
 
 pub struct Replica<U> {
     op_num: u32,
-    upcall: U,
+    pub upcall: U,
 }
 
 impl<U> Replica<U> {

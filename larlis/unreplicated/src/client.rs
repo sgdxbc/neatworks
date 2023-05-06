@@ -16,18 +16,18 @@ pub struct Client<O, R> {
     request_num: u32,
     ticked: bool,
     op: Option<Vec<u8>>,
-    outgress: O,
-    result: R,
+    pub egress: O,
+    pub result: R,
 }
 
 impl<O, R> Client<O, R> {
-    pub fn new(id: u32, outgress: O, result: R) -> Self {
+    pub fn new(id: u32, egress: O, result: R) -> Self {
         Self {
             id,
             request_num: 0,
             ticked: false,
             op: None,
-            outgress,
+            egress,
             result,
         }
     }
@@ -68,7 +68,7 @@ where
             request_num: self.request_num,
             op: self.op.clone().unwrap(),
         };
-        self.outgress.update(message);
+        self.egress.update(message);
     }
 
     fn handle(&mut self, message: Reply) {
