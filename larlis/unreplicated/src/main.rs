@@ -1,6 +1,5 @@
 use std::{
     net::SocketAddr,
-    sync::Arc,
     time::{Duration, Instant},
 };
 
@@ -16,7 +15,7 @@ use larlis_core::{
 use larlis_unreplicated::Replica;
 use rand::{rngs::StdRng, SeedableRng};
 use serde::{Deserialize, Serialize};
-use tokio::{net::UdpSocket, select, signal::ctrl_c, spawn, time::sleep};
+use tokio::{select, signal::ctrl_c, spawn, time::sleep};
 
 struct Null;
 
@@ -114,19 +113,19 @@ async fn run_clients(cli: Cli, route: route::ClientTable, replica_addr: SocketAd
     }
 }
 
-async fn run_replica(_cli: Cli, route: route::ClientTable) {
-    let socket = Arc::new(UdpSocket::bind("0.0.0.0:60002").await.unwrap());
+async fn run_replica(_cli: Cli, route: route::ClientTable, replica_addr: SocketAddr) {
+    let egress = larlis_udp::Out::bind(replica_addr).await;
 
     let app = larlis_unreplicated::App(Null).install(
         Closure::from(move |(id, message)| (route.lookup_addr(&id), message))
-            .install(ser().install(larlis_udp::Out(socket.clone()))),
+            .install(ser().install(egress.clone())),
     );
     let mut replica = Replica::new(app);
 
-    let mut ingress = larlis_udp::In {
-        socket,
-        state: de().install(Closure::from(|(_, message)| message).install(&mut replica)),
-    };
+    let mut ingress = larlis_udp::In::new(
+        &egress,
+        de().install(Closure::from(|(_, message)| message).install(&mut replica)),
+    );
     select! {
         _ = ingress.start() => unreachable!(),
         result = ctrl_c() => result.unwrap(),
@@ -195,10 +194,11 @@ async fn main() {
             }
         }
     }
+    let replica_addr = replica.unwrap();
 
     if cli.client_index.is_some() {
-        run_clients(cli, route, replica.unwrap()).await;
+        run_clients(cli, route, replica_addr).await;
     } else {
-        run_replica(cli, route).await;
+        run_replica(cli, route, replica_addr).await;
     }
 }
