@@ -15,7 +15,12 @@ use larlis_core::{
 use larlis_unreplicated::Replica;
 use rand::{rngs::StdRng, SeedableRng};
 use serde::{Deserialize, Serialize};
-use tokio::{select, signal::ctrl_c, spawn, time::sleep};
+use tokio::{
+    select,
+    signal::ctrl_c,
+    spawn,
+    time::{sleep, timeout},
+};
 
 struct Null;
 
@@ -63,7 +68,7 @@ async fn run_clients(cli: Cli, route: route::ClientTable, replica_addr: SocketAd
     for index in client_index..client_index + client_count {
         let client_id = *route.identity(index);
         let client_addr = route.lookup_addr(&client_id);
-        let client_drive = Drive::<Message>::default();
+        let mut client_drive = Drive::<Message>::default();
         let egress = larlis_udp::Out::bind(client_addr).await;
         let mut ingress = larlis_udp::In::new(
             &egress,
@@ -83,11 +88,25 @@ async fn run_clients(cli: Cli, route: route::ClientTable, replica_addr: SocketAd
             workload,
         );
         clients.push(spawn(async move {
-            client.result.outstanding_start = Instant::now();
+            let now = Instant::now();
+            client.result.outstanding_start = now;
             client_drive
                 .state()
                 .update(Message::Invoke(Default::default()));
-            client_drive.run(&mut client).await; // TODO tick
+
+            //
+            while Instant::now() - now
+                < Duration::from_secs(cli.client_sec.unwrap()) + Duration::from_millis(100)
+            {
+                let result = timeout(
+                    Duration::from_millis(100),
+                    client_drive.run_mut(&mut client),
+                )
+                .await;
+                assert!(result.is_err());
+                client.update(Message::Tick);
+            }
+
             client
         }));
         ingress_tasks.push(spawn(async move { ingress.start().await }));

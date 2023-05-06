@@ -89,4 +89,11 @@ impl<M> Drive<M> {
             state.update(message)
         }
     }
+
+    pub async fn run_mut(&mut self, mut state: impl State<'_, Message = M>) {
+        loop {
+            let message = self.receiver.recv().await.unwrap();
+            state.update(message)
+        }
+    }
 }
