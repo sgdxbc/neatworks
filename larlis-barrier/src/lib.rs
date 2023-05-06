@@ -1,4 +1,7 @@
-use std::{collections::HashMap, net::SocketAddr};
+use std::{
+    collections::HashMap,
+    net::{IpAddr, SocketAddr},
+};
 
 use larlis_bincode::{de, ser};
 use larlis_core::{
@@ -10,7 +13,7 @@ use serde::{de::DeserializeOwned, Serialize};
 use tokio::spawn;
 
 /// if `M` is `Ord`, then a sorted `Message<M>` will have deterministic content.
-pub type Message<M> = Vec<(M, SocketAddr)>;
+pub type Message<M> = Vec<(M, IpAddr)>;
 
 pub struct Service<M, E, F> {
     egress: E,
@@ -49,7 +52,7 @@ where
             let message = Vec::from_iter(
                 self.accumulated
                     .iter()
-                    .map(|(&addr, message)| (message.clone(), addr)),
+                    .map(|(addr, message)| (message.clone(), addr.ip())),
             );
             for &remote in self.accumulated.keys() {
                 self.egress.update((remote, message.clone()))

@@ -1,5 +1,5 @@
 use std::{
-    net::SocketAddr,
+    net::{IpAddr, SocketAddr},
     time::{Duration, Instant},
 };
 
@@ -60,21 +60,18 @@ where
 async fn run_clients(cli: Cli, route: route::ClientTable, replica_addr: SocketAddr) {
     use larlis_unreplicated::client::Message;
 
-    let (Some(client_index), Some(client_count)) = (cli.client_index, cli.client_count) else {
-        unreachable!()
-    };
+    let client_index = cli.client_index.unwrap();
     let mut clients = Vec::new();
     let mut ingress_tasks = Vec::new();
-    for index in client_index..client_index + client_count {
+    for index in client_index..client_index + cli.client_count {
         let client_id = *route.identity(index);
         let client_addr = route.lookup_addr(&client_id);
-        let client_wire = Wire::<Message>::default();
+        let client_wire = Wire::default();
         let egress = larlis_udp::Out::bind(client_addr).await;
         let mut ingress = larlis_udp::In::new(
             &egress,
-            de::<larlis_unreplicated::Reply>().install(
-                Closure::from(|(_, message): (SocketAddr, _)| Message::Handle(message))
-                    .install(client_wire.state()),
+            de().install(
+                Closure::from(|(_, message)| Message::Handle(message)).install(client_wire.state()),
             ),
         );
         let workload = Workload {
@@ -97,7 +94,7 @@ async fn run_clients(cli: Cli, route: route::ClientTable, replica_addr: SocketAd
 
             //
             while Instant::now() - now
-                < Duration::from_secs(cli.client_sec.unwrap()) + Duration::from_millis(100)
+                < Duration::from_secs(cli.client_sec) + Duration::from_millis(100)
             {
                 let result =
                     timeout(Duration::from_millis(100), client_drive.run(&mut client)).await;
@@ -110,12 +107,12 @@ async fn run_clients(cli: Cli, route: route::ClientTable, replica_addr: SocketAd
         ingress_tasks.push(spawn(async move { ingress.start().await }));
     }
 
-    sleep(Duration::from_secs(cli.client_sec.unwrap())).await;
+    sleep(Duration::from_secs(cli.client_sec)).await;
 
     for ingress in ingress_tasks {
         ingress.abort();
     }
-    for (index, client) in (client_index..client_index + client_count).zip(clients) {
+    for (index, client) in (client_index..client_index + cli.client_count).zip(clients) {
         let client = client.await.unwrap(); //
         let mut latencies = client.result.latencies;
         latencies.sort();
@@ -123,7 +120,7 @@ async fn run_clients(cli: Cli, route: route::ClientTable, replica_addr: SocketAd
             "{index},{},{}",
             latencies.len(),
             latencies
-                .get(latencies.len() * 100 / 99)
+                .get(latencies.len() * 99 / 100)
                 .unwrap_or(&Duration::ZERO)
                 .as_secs_f64()
         );
@@ -162,14 +159,14 @@ enum BarrierUser {
 struct Cli {
     #[clap(long)]
     client_index: Option<usize>,
-    #[clap(long)]
-    client_count: Option<usize>,
+    #[clap(long, default_value_t = 1)]
+    client_count: usize,
     #[clap(long, default_value_t = 0)]
     barrier_count: usize,
     #[clap(long)]
-    barrier_addr: Option<SocketAddr>,
-    #[clap(long)]
-    client_sec: Option<u64>,
+    barrier_host: Option<IpAddr>,
+    #[clap(long, default_value_t = 1)]
+    client_sec: u64,
 }
 
 #[tokio::main]
@@ -182,14 +179,13 @@ async fn main() {
         return;
     }
 
-    let user = match (cli.client_index, cli.client_count) {
-        (Some(index), Some(count)) => BarrierUser::Client(index, count),
-        (None, None) => BarrierUser::Replica,
-        _ => unimplemented!(),
+    let user = match cli.client_index {
+        Some(index) => BarrierUser::Client(index, cli.client_count),
+        None => BarrierUser::Replica,
     };
     let mut users = use_barrier(
-        SocketAddr::from(([0, 0, 0, 0], 60001)),
-        cli.barrier_addr.unwrap(),
+        SocketAddr::from(([0, 0, 0, 0], 0)),
+        SocketAddr::from((cli.barrier_host.unwrap(), 60000)),
         user,
     )
     .await;
@@ -200,14 +196,13 @@ async fn main() {
     let mut rng = StdRng::seed_from_u64(0);
     for user in users {
         match user {
-            (BarrierUser::Replica, mut addr) => {
+            (BarrierUser::Replica, addr) => {
                 assert!(replica.is_none());
-                addr.set_port(60002);
-                replica = Some(addr);
+                replica = Some(SocketAddr::from((addr, 60002)));
             }
-            (BarrierUser::Client(index, count), addr) => {
+            (BarrierUser::Client(index, count), host) => {
                 assert_eq!(index, route.len());
-                route.add_host(addr.ip(), count, &mut rng);
+                route.add_host(host, count, &mut rng);
             }
         }
     }
