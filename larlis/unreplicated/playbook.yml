@@ -15,7 +15,8 @@
   tasks:
   - name: Set work directory
     ansible.builtin.set_fact:
-      work_dir: "{{ override_work_dir | default('/local/cowsay') }}"
+      work_dir: "/local/cowsay"
+    when: work_dir is undefined
   - name: Synchronize
     ansible.posix.synchronize:
       src: "{{ playbook_dir }}/../../target/release/larlis-unreplicated"
@@ -27,9 +28,11 @@
 
   tasks:
   - name: Run detached
-    ansible.builtin.shell: >
+    ansible.builtin.shell:
       tmux new-session -d -s larlis-unreplicated-service
-      "{{ work_dir }}/larlis-unreplicated --barrier-count {{ (groups['replica'] | length) + (groups['client'] | length) }} || read _"
+      "{{ work_dir }}/larlis-unreplicated
+        --barrier-count {{ (groups['replica'] | length) + (groups['client'] | length) }}
+        || read _"
 
 - name: Deploy replica
   hosts: replica
@@ -37,14 +40,16 @@
 
   tasks:
   - name: Run detached
-    ansible.builtin.shell: >
+    ansible.builtin.shell:
       tmux new-session -d -s larlis-unreplicated
-      "{{ work_dir }}/larlis-unreplicated --barrier-host {{ groups['service'][0] }} || read _"
+      "{{ work_dir }}/larlis-unreplicated 
+        --barrier-host {{ groups['service'][0] }} 
+        || read _"
 
 - name: Run clients
   hosts: client
   vars:
-    client_count: "{{ override_client_count | default('1') }}"
+    some_client_count: "{{ client_count | default('1') }}"
   gather_facts: False
 
   tasks:
@@ -52,13 +57,14 @@
     any_errors_fatal: True
     block:
     - name: Run
-      ansible.builtin.shell: >
+      ansible.builtin.shell:
         ./larlis-unreplicated
-        --barrier-host {{ groups['service'][0] }}
-        --client-index {{ (groups['client'].index(inventory_hostname) | int) * (client_count | int) }}
-        --client-count {{ client_count }}
-        1> ./unreplicated-{{ inventory_hostname }}.txt
-        2> ./err.log
+          --barrier-host {{ groups['service'][0] }}
+          --client-index {{ (groups['client'].index(inventory_hostname) | int) * (some_client_count | int) }}
+          --client-count {{ some_client_count }}
+          --client-sec 10
+          1> ./unreplicated-{{ inventory_hostname }}.txt
+          2> ./err.log
       args:
         chdir: "{{ work_dir }}"
     - name: Synchronize
