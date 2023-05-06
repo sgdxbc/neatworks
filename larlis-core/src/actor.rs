@@ -1,5 +1,3 @@
-use std::mem::replace;
-
 use tokio::sync::mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender};
 
 pub trait State<'message> {
@@ -34,22 +32,23 @@ impl<T> SharedClone for std::rc::Rc<T> {}
 
 impl<T> SharedClone for std::sync::Arc<T> {}
 
-pub struct Drive<M> {
+#[derive(Debug)]
+pub struct Wire<M> {
     sender: UnboundedSender<M>,
     receiver: UnboundedReceiver<M>,
 }
 
-pub struct DriveState<M>(UnboundedSender<M>);
+pub struct WireState<M>(UnboundedSender<M>);
 
-impl<M> Clone for DriveState<M> {
+impl<M> Clone for WireState<M> {
     fn clone(&self) -> Self {
         Self(self.0.clone())
     }
 }
 
-impl<M> SharedClone for DriveState<M> {}
+impl<M> SharedClone for WireState<M> {}
 
-impl<M> State<'_> for DriveState<M> {
+impl<M> State<'_> for WireState<M> {
     type Message = M;
 
     fn update(&mut self, message: Self::Message) {
@@ -59,40 +58,35 @@ impl<M> State<'_> for DriveState<M> {
     }
 }
 
-impl<M> Default for Drive<M> {
+impl<M> Default for Wire<M> {
     fn default() -> Self {
         let (sender, receiver) = unbounded_channel();
         Self { sender, receiver }
     }
 }
 
+#[derive(Debug)]
+pub struct Drive<M>(UnboundedReceiver<M>);
+
+impl<M> From<Wire<M>> for Drive<M> {
+    fn from(value: Wire<M>) -> Self {
+        Self(value.receiver)
+    }
+}
+
+impl<M> Wire<M> {
+    pub fn state(&self) -> WireState<M> {
+        WireState(self.sender.clone())
+    }
+}
+
 impl<M> Drive<M> {
-    pub fn state(&self) -> DriveState<M> {
-        DriveState(self.sender.clone())
-    }
-
     pub async fn recv(&mut self) -> Option<M> {
-        // may need rethinking
-        let sender = replace(&mut self.sender, unbounded_channel().0);
-        let weak_sender = sender.downgrade();
-        drop(sender);
-        let message = self.receiver.recv().await;
-        if let Some(sender) = weak_sender.upgrade() {
-            self.sender = sender;
-        }
-        message
+        self.0.recv().await
     }
 
-    pub async fn run(mut self, mut state: impl State<'_, Message = M>) {
-        drop(self.sender);
-        while let Some(message) = self.receiver.recv().await {
-            state.update(message)
-        }
-    }
-
-    pub async fn run_mut(&mut self, mut state: impl State<'_, Message = M>) {
-        loop {
-            let message = self.receiver.recv().await.unwrap();
+    pub async fn run(&mut self, mut state: impl State<'_, Message = M>) {
+        while let Some(message) = self.0.recv().await {
             state.update(message)
         }
     }

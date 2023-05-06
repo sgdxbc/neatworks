@@ -3,7 +3,7 @@ use std::{iter::repeat_with, net::SocketAddr};
 use larlis_barrier::{Message, Service};
 use larlis_bincode::{de, ser};
 use larlis_core::{
-    actor::{Drive, State},
+    actor::{Drive, State, Wire},
     app::{Closure, PureState},
     Dispatch,
 };
@@ -14,7 +14,7 @@ type UserPayload = u16;
 
 async fn use_barrier_udp(addr: SocketAddr, service: SocketAddr) -> Message<UserPayload> {
     // 1. listen to barrier message
-    let mut message = Drive::<Message<UserPayload>>::default();
+    let message = Wire::<Message<UserPayload>>::default();
     let state = de().install(Closure::from(|(_, message)| message).install(message.state()));
     let out = larlis_udp::Out::bind(addr).await;
     let local_message = out.0.local_addr().unwrap().port();
@@ -25,7 +25,7 @@ async fn use_barrier_udp(addr: SocketAddr, service: SocketAddr) -> Message<UserP
     ser().install(out).update((service, local_message));
 
     // 3. wait for rx
-    let mut message = message.recv().await.unwrap();
+    let mut message = Drive::from(message).recv().await.unwrap();
     ingress.abort();
     message.sort();
     message
@@ -34,7 +34,7 @@ async fn use_barrier_udp(addr: SocketAddr, service: SocketAddr) -> Message<UserP
 async fn provide_barrier_udp(addr: SocketAddr, count: usize) {
     let out = larlis_udp::Out::bind(addr).await;
     let egress = ser().install(out.clone());
-    let mut finished = Drive::default();
+    let finished = Wire::default();
     let state = de().install(Service::<UserPayload, _, _>::new(
         egress,
         finished.state(),
@@ -42,7 +42,7 @@ async fn provide_barrier_udp(addr: SocketAddr, count: usize) {
     ));
     let mut ingress = larlis_udp::In::new(&out, state);
     let ingress = spawn(async move { ingress.start().await });
-    finished.recv().await.unwrap();
+    Drive::from(finished).recv().await.unwrap();
     ingress.abort();
 }
 
@@ -74,12 +74,12 @@ async fn sync_udp() {
 }
 
 async fn use_barrier_tcp(addr: SocketAddr, service: SocketAddr) -> Message<UserPayload> {
-    let mut message = Drive::<Message<UserPayload>>::default();
+    let message = Wire::<Message<UserPayload>>::default();
     let mut connection = larlis_tcp::Connection::connect(
         addr,
         service,
         de().install(Closure::from(|(_, message)| message).install(message.state())),
-        Drive::<()>::default().state(),
+        Wire::<()>::default().state(),
     )
     .await;
     let local_message = connection.stream.local_addr().unwrap().port();
@@ -89,16 +89,16 @@ async fn use_barrier_tcp(addr: SocketAddr, service: SocketAddr) -> Message<UserP
 
     ser().install(dispatch).update((service, local_message));
 
-    let mut message = message.recv().await.unwrap();
+    let mut message = Drive::from(message).recv().await.unwrap();
     connection.abort();
     message.sort();
     message
 }
 
 async fn provide_barrier_tcp(addr: SocketAddr, count: usize) {
-    let app_drive = Drive::<(SocketAddr, UserPayload)>::default();
-    let mut finished = Drive::<()>::default();
-    let disconnected = Drive::<()>::default();
+    let app_wire = Wire::<(SocketAddr, UserPayload)>::default();
+    let finished = Wire::<()>::default();
+    let disconnected = Wire::<()>::default();
 
     let listener = larlis_tcp::Listener::bind(addr);
     let mut dispatch = Dispatch::default();
@@ -106,7 +106,7 @@ async fn provide_barrier_tcp(addr: SocketAddr, count: usize) {
     for _ in 0..count {
         let mut connection = listener
             .accept(
-                de::<UserPayload>().install(app_drive.state()),
+                de::<UserPayload>().install(app_wire.state()),
                 disconnected.state(),
             )
             .await;
@@ -115,8 +115,8 @@ async fn provide_barrier_tcp(addr: SocketAddr, count: usize) {
     }
     let app = Service::new(ser().install(dispatch), finished.state(), count);
 
-    let app = spawn(async move { app_drive.run(app).await });
-    finished.recv().await.unwrap();
+    let app = spawn(async move { Drive::from(app_wire).run(app).await });
+    Drive::from(finished).recv().await.unwrap();
     for connection in connections {
         connection.await.unwrap()
     }

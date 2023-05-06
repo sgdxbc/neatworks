@@ -7,7 +7,7 @@ use clap::Parser;
 use larlis_barrier::{provide_barrier, use_barrier};
 use larlis_bincode::{de, ser};
 use larlis_core::{
-    actor::{Drive, State},
+    actor::{Drive, State, Wire},
     app::{Closure, PureState},
     route::{self, ClientTable},
     App,
@@ -68,19 +68,19 @@ async fn run_clients(cli: Cli, route: route::ClientTable, replica_addr: SocketAd
     for index in client_index..client_index + client_count {
         let client_id = *route.identity(index);
         let client_addr = route.lookup_addr(&client_id);
-        let mut client_drive = Drive::<Message>::default();
+        let client_wire = Wire::<Message>::default();
         let egress = larlis_udp::Out::bind(client_addr).await;
         let mut ingress = larlis_udp::In::new(
             &egress,
             de::<larlis_unreplicated::Reply>().install(
                 Closure::from(|(_, message): (SocketAddr, _)| Message::Handle(message))
-                    .install(client_drive.state()),
+                    .install(client_wire.state()),
             ),
         );
         let workload = Workload {
             latencies: Default::default(),
             outstanding_start: Instant::now(),
-            invoke: client_drive.state(),
+            invoke: client_wire.state(),
         };
         let mut client = larlis_unreplicated::Client::new(
             client_id,
@@ -90,19 +90,17 @@ async fn run_clients(cli: Cli, route: route::ClientTable, replica_addr: SocketAd
         clients.push(spawn(async move {
             let now = Instant::now();
             client.result.outstanding_start = now;
-            client_drive
+            client_wire
                 .state()
                 .update(Message::Invoke(Default::default()));
+            let mut client_drive = Drive::from(client_wire);
 
             //
             while Instant::now() - now
                 < Duration::from_secs(cli.client_sec.unwrap()) + Duration::from_millis(100)
             {
-                let result = timeout(
-                    Duration::from_millis(100),
-                    client_drive.run_mut(&mut client),
-                )
-                .await;
+                let result =
+                    timeout(Duration::from_millis(100), client_drive.run(&mut client)).await;
                 assert!(result.is_err());
                 client.update(Message::Tick);
             }

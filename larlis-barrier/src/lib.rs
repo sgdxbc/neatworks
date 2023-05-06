@@ -2,7 +2,7 @@ use std::{collections::HashMap, net::SocketAddr};
 
 use larlis_bincode::{de, ser};
 use larlis_core::{
-    actor::{Drive, State},
+    actor::{Drive, State, Wire},
     app::{Closure, PureState},
     Dispatch,
 };
@@ -63,12 +63,12 @@ pub async fn use_barrier<M>(addr: SocketAddr, service: SocketAddr, payload: M) -
 where
     M: Serialize + DeserializeOwned + Send + 'static,
 {
-    let mut message = Drive::default();
+    let message = Wire::default();
     let mut connection = larlis_tcp::Connection::connect(
         addr,
         service,
         de().install(Closure::from(|(_, message)| message).install(message.state())),
-        Drive::default().state(),
+        Wire::default().state(),
     )
     .await;
     let mut dispatch = Dispatch::default();
@@ -77,7 +77,7 @@ where
 
     ser().install(dispatch).update((service, payload));
 
-    let message = message.recv().await.unwrap();
+    let message = Drive::from(message).recv().await.unwrap();
     connection.abort();
     message
 }
@@ -86,24 +86,24 @@ pub async fn provide_barrier<M>(addr: SocketAddr, count: usize)
 where
     M: Clone + Serialize + DeserializeOwned + Send + 'static,
 {
-    let app_drive = Drive::default();
-    let mut finished = Drive::default();
-    let disconnected = Drive::default();
+    let app_wire = Wire::default();
+    let finished = Wire::default();
+    let disconnected = Wire::default();
 
     let listener = larlis_tcp::Listener::bind(addr);
     let mut dispatch = Dispatch::default();
     let mut connections = Vec::new();
     for _ in 0..count {
         let mut connection = listener
-            .accept(de::<M>().install(app_drive.state()), disconnected.state())
+            .accept(de::<M>().install(app_wire.state()), disconnected.state())
             .await;
         dispatch.insert_state(connection.remote_addr, connection.egress_state());
         connections.push(spawn(async move { connection.start().await }));
     }
     let app = Service::new(ser().install(dispatch), finished.state(), count);
 
-    let app = spawn(async move { app_drive.run(app).await });
-    finished.recv().await.unwrap();
+    let app = spawn(async move { Drive::from(app_wire).run(app).await });
+    Drive::from(finished).recv().await.unwrap();
     for connection in connections {
         connection.await.unwrap()
     }
