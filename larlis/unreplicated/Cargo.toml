@@ -8,6 +8,7 @@ clap = { version = "4.2.7", features = ["derive"] }
 larlis-barrier = { version = "0.1.0", path = "../../larlis-barrier" }
 larlis-bincode = { version = "0.1.0", path = "../../larlis-bincode" }
 larlis-core = { version = "0.1.0", path = "../../larlis-core" }
+larlis-tcp = { version = "0.1.0", path = "../../larlis-tcp" }
 larlis-udp = { version = "0.1.0", path = "../../larlis-udp" }
 rand = "0.8.5"
 serde = { version = "1.0.160", features = ["derive"] }

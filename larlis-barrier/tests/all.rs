@@ -84,10 +84,12 @@ async fn use_barrier_tcp(addr: SocketAddr, service: SocketAddr) -> Message<UserP
     .await;
     let local_message = connection.stream.local_addr().unwrap().port();
     let mut dispatch = Dispatch::default();
-    dispatch.insert_state(connection.remote_addr, connection.egress_state());
+    dispatch.insert_state(connection.remote_addr, connection.out_state());
     let connection = spawn(async move { connection.start().await });
 
-    ser().install(dispatch).update((service, local_message));
+    ser()
+        .install(Closure::from(From::from).install(dispatch))
+        .update((service, local_message));
 
     let mut message = Drive::from(message).recv().await.unwrap();
     connection.abort();
@@ -110,10 +112,14 @@ async fn provide_barrier_tcp(addr: SocketAddr, count: usize) {
                 disconnected.state(),
             )
             .await;
-        dispatch.insert_state(connection.remote_addr, connection.egress_state());
+        dispatch.insert_state(connection.remote_addr, connection.out_state());
         connections.push(spawn(async move { connection.start().await }));
     }
-    let app = Service::new(ser().install(dispatch), finished.state(), count);
+    let app = Service::new(
+        ser().install(Closure::from(From::from).install(dispatch)),
+        finished.state(),
+        count,
+    );
 
     let app = spawn(async move { Drive::from(app_wire).run(app).await });
     Drive::from(finished).recv().await.unwrap();

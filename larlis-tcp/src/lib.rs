@@ -43,15 +43,12 @@ impl<S, D> Connection<S, D> {
         let socket = TcpSocket::new_v4().unwrap();
         socket.set_reuseaddr(true).unwrap();
         socket.bind(local_addr).unwrap();
-        Self::new(
-            socket.connect(remote_addr).await.unwrap(),
-            remote_addr,
-            state,
-            disconnected,
-        )
+        let stream = socket.connect(remote_addr).await.unwrap();
+        // stream.set_nodelay(true).unwrap(); //
+        Self::new(stream, remote_addr, state, disconnected)
     }
 
-    pub fn egress_state(&self) -> ConnectionOut {
+    pub fn out_state(&self) -> ConnectionOut {
         ConnectionOut(self.egress.0.clone())
     }
 
