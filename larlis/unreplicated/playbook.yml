@@ -43,7 +43,8 @@
     ansible.builtin.shell:
       tmux new-session -d -s larlis-unreplicated
       "{{ work_dir }}/larlis-unreplicated 
-        --barrier-host {{ groups['service'][0] }} 
+        --barrier-host {{ groups['service'][0] }}
+        --tcp
         || read _"
 
 - name: Run clients
@@ -60,6 +61,7 @@
       ansible.builtin.shell:
         ./larlis-unreplicated
           --barrier-host {{ groups['service'][0] }}
+          --tcp
           --client-index {{ (groups['client'].index(inventory_hostname) | int) * (some_client_count | int) }}
           --client-count {{ some_client_count }}
           --client-sec 10
@@ -86,3 +88,4 @@
   tasks:
   - name: Interrupt
     ansible.builtin.command: pkill -INT --full larlis-unreplicated
+    ignore_errors: True

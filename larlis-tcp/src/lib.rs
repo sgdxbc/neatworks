@@ -44,7 +44,7 @@ impl<S, D> Connection<S, D> {
         socket.set_reuseaddr(true).unwrap();
         socket.bind(local_addr).unwrap();
         let stream = socket.connect(remote_addr).await.unwrap();
-        // stream.set_nodelay(true).unwrap(); //
+        stream.set_nodelay(true).unwrap(); //
         Self::new(stream, remote_addr, state, disconnected)
     }
 
@@ -55,7 +55,7 @@ impl<S, D> Connection<S, D> {
     pub async fn start(&mut self)
     where
         S: for<'m> State<'m, Message = (SocketAddr, &'m [u8])>,
-        D: for<'m> State<'m, Message = ()>,
+        D: for<'m> State<'m, Message = SocketAddr>,
     {
         let mut buf = vec![0; 65536]; //
         loop {
@@ -83,7 +83,7 @@ impl<S, D> Connection<S, D> {
                 }
             }
         }
-        self.disconnected.update(())
+        self.disconnected.update(self.remote_addr)
     }
 }
 
@@ -110,6 +110,7 @@ impl Listener {
 
     pub async fn accept<S, D>(&self, state: S, disconnected: D) -> Connection<S, D> {
         let (stream, remote) = self.0.accept().await.unwrap();
+        stream.set_nodelay(true).unwrap(); //
         Connection::new(stream, remote, state, disconnected)
     }
 }

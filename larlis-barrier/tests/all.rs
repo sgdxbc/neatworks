@@ -79,7 +79,7 @@ async fn use_barrier_tcp(addr: SocketAddr, service: SocketAddr) -> Message<UserP
         addr,
         service,
         de().install(Closure::from(|(_, message)| message).install(message.state())),
-        Wire::<()>::default().state(),
+        Wire::default().state(),
     )
     .await;
     let local_message = connection.stream.local_addr().unwrap().port();
@@ -99,8 +99,8 @@ async fn use_barrier_tcp(addr: SocketAddr, service: SocketAddr) -> Message<UserP
 
 async fn provide_barrier_tcp(addr: SocketAddr, count: usize) {
     let app_wire = Wire::<(SocketAddr, UserPayload)>::default();
-    let finished = Wire::<()>::default();
-    let disconnected = Wire::<()>::default();
+    let finished = Wire::default();
+    let disconnected = Wire::default();
 
     let listener = larlis_tcp::Listener::bind(addr);
     let mut dispatch = Dispatch::default();
