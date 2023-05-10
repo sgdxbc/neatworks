@@ -1,16 +1,14 @@
-use std::io::Cursor;
+use std::{io::Cursor, net::SocketAddr, sync::Arc};
 
 use rcgen::{CertificateParams, DistinguishedName, KeyPair, PKCS_ECDSA_P256_SHA256};
-use tokio::{
-    net::TcpStream,
-    sync::mpsc::{UnboundedReceiver, UnboundedSender},
-};
+use tokio::net::{TcpListener, TcpSocket, TcpStream};
 use tokio_rustls::{
     rustls::{
         server::AllowAnyAuthenticatedClient, Certificate, ClientConfig, PrivateKey, RootCertStore,
-        ServerConfig,
+        ServerConfig, ServerName::IpAddress,
     },
-    TlsStream,
+    TlsAcceptor, TlsConnector,
+    TlsStream::{self, Client, Server},
 };
 
 const CERT: &str = include_str!("ca-cert.pem");
@@ -59,16 +57,58 @@ fn server_config() -> ServerConfig {
         .unwrap()
 }
 
-#[derive(Debug)]
-pub struct Connection<S, D> {
-    pub stream: TlsStream<TcpStream>,
-    pub state: S,
-    pub disconnected: D,
-    egress: (UnboundedSender<Vec<u8>>, UnboundedReceiver<Vec<u8>>),
+pub type Connection<S, D> = larlis_tcp::GeneralConnection<S, D, TlsStream<TcpStream>>;
+pub type ConnectionOut = larlis_tcp::ConnectionOut;
+
+pub async fn connect<S, D>(
+    local_addr: SocketAddr,
+    remote_addr: SocketAddr,
+    state: S,
+    disconnected: D,
+) -> Connection<S, D> {
+    let socket = TcpSocket::new_v4().unwrap();
+    socket.set_reuseaddr(true).unwrap();
+    socket.bind(local_addr).unwrap();
+    let stream = socket.connect(remote_addr).await.unwrap();
+    stream.set_nodelay(true).unwrap(); //
+    let stream = TlsConnector::from(Arc::new(client_config()))
+        .connect(IpAddress(remote_addr.ip()), stream)
+        .await
+        .unwrap();
+    Connection::new(Client(stream), remote_addr, state, disconnected)
 }
 
-#[derive(Debug, Clone)]
-pub struct ConnectionOut(UnboundedSender<Vec<u8>>);
+pub fn stream_ref<S, D>(connection: &Connection<S, D>) -> &TcpStream {
+    connection.stream.get_ref().0
+}
+
+pub struct Listener {
+    plain: TcpListener,
+    acceptor: TlsAcceptor,
+}
+
+impl Listener {
+    pub fn bind(addr: SocketAddr) -> Self {
+        let socket = TcpSocket::new_v4().unwrap();
+        socket.set_reuseaddr(true).unwrap();
+        socket.bind(addr).unwrap();
+        Self {
+            plain: socket.listen(4096).unwrap(),
+            acceptor: TlsAcceptor::from(Arc::new(server_config())),
+        }
+    }
+
+    pub async fn accept<S, D>(&self, state: S, disconnected: D) -> Connection<S, D> {
+        let (stream, remote) = self.plain.accept().await.unwrap();
+        stream.set_nodelay(true).unwrap(); //
+        Connection::new(
+            Server(self.acceptor.accept(stream).await.unwrap()),
+            remote,
+            state,
+            disconnected,
+        )
+    }
+}
 
 #[cfg(test)]
 mod tests {

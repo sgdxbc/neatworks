@@ -2,7 +2,7 @@ use std::net::SocketAddr;
 
 use larlis_core::actor::State;
 use tokio::{
-    io::{AsyncReadExt, AsyncWriteExt},
+    io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, BufStream},
     net::{TcpListener, TcpSocket, TcpStream},
     select,
     sync::mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender},
@@ -12,19 +12,21 @@ use tokio::{
 // design choice: unreliable tx over actively retry/back propogation
 
 #[derive(Debug)]
-pub struct Connection<S, D> {
-    pub stream: TcpStream,
+pub struct GeneralConnection<S, D, T> {
+    pub stream: T,
     pub remote_addr: SocketAddr,
     pub state: S,
     pub disconnected: D,
     egress: (UnboundedSender<Vec<u8>>, UnboundedReceiver<Vec<u8>>),
 }
 
+pub type Connection<S, D> = GeneralConnection<S, D, BufStream<TcpStream>>;
+
 #[derive(Debug, Clone)]
 pub struct ConnectionOut(UnboundedSender<Vec<u8>>);
 
-impl<S, D> Connection<S, D> {
-    pub fn new(stream: TcpStream, remote_addr: SocketAddr, state: S, disconnected: D) -> Self {
+impl<S, D, T> GeneralConnection<S, D, T> {
+    pub fn new(stream: T, remote_addr: SocketAddr, state: S, disconnected: D) -> Self {
         Self {
             stream,
             remote_addr,
@@ -33,7 +35,9 @@ impl<S, D> Connection<S, D> {
             egress: unbounded_channel(),
         }
     }
+}
 
+impl<S, D> Connection<S, D> {
     pub async fn connect(
         local_addr: SocketAddr,
         remote_addr: SocketAddr,
@@ -45,9 +49,15 @@ impl<S, D> Connection<S, D> {
         socket.bind(local_addr).unwrap();
         let stream = socket.connect(remote_addr).await.unwrap();
         stream.set_nodelay(true).unwrap(); //
-        Self::new(stream, remote_addr, state, disconnected)
+        Self::new(BufStream::new(stream), remote_addr, state, disconnected)
     }
 
+    pub fn stream_ref(&self) -> &TcpStream {
+        self.stream.get_ref()
+    }
+}
+
+impl<S, D, T> GeneralConnection<S, D, T> {
     pub fn out_state(&self) -> ConnectionOut {
         ConnectionOut(self.egress.0.clone())
     }
@@ -56,6 +66,8 @@ impl<S, D> Connection<S, D> {
     where
         S: for<'m> State<'m, Message = (SocketAddr, &'m [u8])>,
         D: for<'m> State<'m, Message = SocketAddr>,
+        // require Unpin or pin it locally?
+        T: AsyncRead + AsyncWrite + Unpin,
     {
         let mut buf = vec![0; 65536]; //
         loop {
@@ -111,6 +123,6 @@ impl Listener {
     pub async fn accept<S, D>(&self, state: S, disconnected: D) -> Connection<S, D> {
         let (stream, remote) = self.0.accept().await.unwrap();
         stream.set_nodelay(true).unwrap(); //
-        Connection::new(stream, remote, state, disconnected)
+        Connection::new(BufStream::new(stream), remote, state, disconnected)
     }
 }

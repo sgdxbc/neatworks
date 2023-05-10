@@ -6,6 +6,7 @@ edition = "2021"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
+larlis-tcp = { version = "0.1.0", path = "../larlis-tcp" }
 p256 = "0.13.2"
 rand = "0.8.5"
 rcgen = { version = "0.10.0", features = ["x509-parser"] }
