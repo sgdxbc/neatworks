@@ -1,0 +1,85 @@
+use std::io::Cursor;
+
+use rcgen::{CertificateParams, DistinguishedName, KeyPair, PKCS_ECDSA_P256_SHA256};
+use tokio::{
+    net::TcpStream,
+    sync::mpsc::{UnboundedReceiver, UnboundedSender},
+};
+use tokio_rustls::{
+    rustls::{
+        server::AllowAnyAuthenticatedClient, Certificate, ClientConfig, PrivateKey, RootCertStore,
+        ServerConfig,
+    },
+    TlsStream,
+};
+
+const CERT: &str = include_str!("ca-cert.pem");
+const KEY: &str = include_str!("ca-key.pem");
+
+fn root_store() -> RootCertStore {
+    let mut store = RootCertStore::empty();
+    store.add_parsable_certificates(&rustls_pemfile::certs(&mut Cursor::new(CERT)).unwrap());
+    store
+}
+
+fn generate() -> (PrivateKey, Certificate) {
+    let key_pair = KeyPair::generate(&PKCS_ECDSA_P256_SHA256).unwrap();
+    let private_key = PrivateKey(key_pair.serialize_der());
+    let mut cert_params = CertificateParams::new(Vec::new());
+    cert_params.distinguished_name = DistinguishedName::new();
+    cert_params.alg = &PKCS_ECDSA_P256_SHA256;
+    cert_params.key_pair = Some(key_pair);
+    let cert = rcgen::Certificate::from_params(cert_params).unwrap();
+    let root_key_pair = KeyPair::from_pem(KEY).unwrap();
+    let root_cert = rcgen::Certificate::from_params(
+        rcgen::CertificateParams::from_ca_cert_pem(CERT, root_key_pair).unwrap(),
+    )
+    .unwrap();
+    (
+        private_key,
+        Certificate(cert.serialize_der_with_signer(&root_cert).unwrap()),
+    )
+}
+
+fn client_config() -> ClientConfig {
+    let (private_key, cert) = generate();
+    ClientConfig::builder()
+        .with_safe_defaults()
+        .with_root_certificates(root_store())
+        .with_single_cert(vec![cert], private_key)
+        .unwrap()
+}
+
+fn server_config() -> ServerConfig {
+    let (private_key, cert) = generate();
+    ServerConfig::builder()
+        .with_safe_defaults()
+        .with_client_cert_verifier(AllowAnyAuthenticatedClient::new(root_store()).boxed())
+        .with_single_cert(vec![cert], private_key)
+        .unwrap()
+}
+
+#[derive(Debug)]
+pub struct Connection<S, D> {
+    pub stream: TlsStream<TcpStream>,
+    pub state: S,
+    pub disconnected: D,
+    egress: (UnboundedSender<Vec<u8>>, UnboundedReceiver<Vec<u8>>),
+}
+
+#[derive(Debug, Clone)]
+pub struct ConnectionOut(UnboundedSender<Vec<u8>>);
+
+#[cfg(test)]
+mod tests {
+    use rcgen::{CertificateParams, KeyPair};
+
+    use super::*;
+
+    #[test]
+    fn valid_cert() {
+        let key_pair = KeyPair::from_pem(KEY).unwrap();
+        let params = CertificateParams::from_ca_cert_pem(CERT, key_pair).unwrap();
+        assert!(params.key_pair.is_some());
+    }
+}

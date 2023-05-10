@@ -1,0 +1,14 @@
+[package]
+name = "larlis-tls"
+version = "0.1.0"
+edition = "2021"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+p256 = "0.13.2"
+rand = "0.8.5"
+rcgen = { version = "0.10.0", features = ["x509-parser"] }
+rustls-pemfile = "1.0.2"
+tokio = { version = "1.28.1", features = ["net", "sync"] }
+tokio-rustls = "0.24.0"
