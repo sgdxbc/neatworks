@@ -1,20 +1,16 @@
 use std::{
     collections::{BTreeMap, HashMap},
-    hash::Hash,
     net::{IpAddr, SocketAddr},
 };
 
 use rand::Rng;
 
 #[derive(Default)]
-pub struct Table<K, I> {
+pub struct ClientTable {
     hosts: BTreeMap<usize, IpAddr>,
-    identities: Vec<K>,
-    routes: HashMap<I, SocketAddr>,
+    identities: Vec<u32>,
+    routes: HashMap<u32, SocketAddr>,
 }
-
-pub type ClientTable = Table<u32, u32>;
-// type PeerTable = Table<public key, peer id>
 
 impl ClientTable {
     pub fn add_host(&mut self, host: IpAddr, count: usize, mut rng: impl Rng) {
@@ -30,18 +26,13 @@ impl ClientTable {
         let (&base_index, &host) = self.hosts.range(..=index).last().unwrap();
         SocketAddr::from((host, 50000 + (index - base_index) as u16))
     }
-}
 
-impl<K, I> Table<K, I> {
-    pub fn identity(&self, index: usize) -> &K {
-        &self.identities[index]
+    pub fn identity(&self, index: usize) -> u32 {
+        self.identities[index]
     }
 
-    pub fn lookup_addr(&self, id: &I) -> SocketAddr
-    where
-        I: Eq + Hash,
-    {
-        self.routes[id]
+    pub fn lookup_addr(&self, id: u32) -> SocketAddr {
+        self.routes[&id]
     }
 
     pub fn len(&self) -> usize {
@@ -53,4 +44,33 @@ impl<K, I> Table<K, I> {
     }
 }
 
-pub type ReplicaTable = Table<(), u8>;
+pub struct ReplicaTable {
+    identities: Vec<[u8; 32]>,
+    routes: Vec<SocketAddr>,
+}
+
+impl ReplicaTable {
+    pub fn len(&self) -> usize {
+        self.identities.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.identities.is_empty()
+    }
+
+    pub fn add(&mut self, addr: SocketAddr, mut rng: impl Rng) {
+        let index = self.len();
+        self.identities.push(rng.gen());
+        self.routes.insert(index as _, addr);
+    }
+
+    pub fn identity(&self, id: u8) -> [u8; 32] {
+        self.identities[id as usize]
+    }
+
+    pub fn lookup_addr(&self, id: u8) -> SocketAddr {
+        self.routes[id as usize]
+    }
+}
+
+// type PeerTable = Table<public key, peer id>

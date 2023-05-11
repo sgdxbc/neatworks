@@ -64,8 +64,8 @@ async fn run_clients_udp(cli: Cli, route: route::ClientTable, replica_addr: Sock
     let mut clients = Vec::new();
     let mut ingress_tasks = Vec::new();
     for index in client_index..client_index + cli.client_count {
-        let client_id = *route.identity(index);
-        let client_addr = route.lookup_addr(&client_id);
+        let client_id = route.identity(index);
+        let client_addr = route.lookup_addr(client_id);
         let client_wire = Wire::default();
         let egress = larlis_udp::Out::bind(client_addr).await;
         let mut ingress = larlis_udp::In::new(
@@ -131,7 +131,7 @@ async fn run_replica_udp(_cli: Cli, route: route::ClientTable, replica_addr: Soc
     let egress = larlis_udp::Out::bind(replica_addr).await;
 
     let app = larlis_unreplicated::App(Null).install(
-        Closure::from(move |(id, message)| (route.lookup_addr(&id), message))
+        Closure::from(move |(id, message)| (route.lookup_addr(id), message))
             .install(ser().install(egress.clone())),
     );
     let mut replica = Replica::new(app);
@@ -156,8 +156,8 @@ async fn run_clients_tcp(cli: Cli, route: route::ClientTable, replica_addr: Sock
     let mut clients = Vec::new();
     let mut connections = Vec::new();
     for index in client_index..client_index + cli.client_count {
-        let client_id = *route.identity(index);
-        let client_addr = route.lookup_addr(&client_id);
+        let client_id = route.identity(index);
+        let client_addr = route.lookup_addr(client_id);
         let client_wire = Wire::default();
 
         let mut connection = larlis_tcp::Connection::connect(
@@ -244,7 +244,7 @@ async fn run_replica_tcp(_cli: Cli, route: route::ClientTable, replica_addr: Soc
     }
 
     let app = larlis_unreplicated::App(Null).install(
-        Closure::from(move |(id, message)| (route.lookup_addr(&id), message))
+        Closure::from(move |(id, message)| (route.lookup_addr(id), message))
             .install(ser().install(Closure::from(From::from).install(dispatch))),
     );
     let mut replica = Replica::new(app);
@@ -265,8 +265,8 @@ async fn run_clients_tls(cli: Cli, route: route::ClientTable, replica_addr: Sock
     let mut clients = Vec::new();
     let mut connections = Vec::new();
     for index in client_index..client_index + cli.client_count {
-        let client_id = *route.identity(index);
-        let client_addr = route.lookup_addr(&client_id);
+        let client_id = route.identity(index);
+        let client_addr = route.lookup_addr(client_id);
         let client_wire = Wire::default();
 
         let connection = larlis_tcp::Connection::connect(
@@ -358,7 +358,7 @@ async fn run_replica_tls(_cli: Cli, route: route::ClientTable, replica_addr: Soc
     }
 
     let app = larlis_unreplicated::App(Null).install(
-        Closure::from(move |(id, message)| (route.lookup_addr(&id), message))
+        Closure::from(move |(id, message)| (route.lookup_addr(id), message))
             .install(ser().install(Closure::from(From::from).install(dispatch))),
     );
     let mut replica = Replica::new(app);
