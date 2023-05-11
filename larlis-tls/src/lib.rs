@@ -60,24 +60,40 @@ fn server_config() -> ServerConfig {
 pub type Connection<S, D> = larlis_tcp::GeneralConnection<S, D, TlsStream<TcpStream>>;
 pub type ConnectionOut = larlis_tcp::ConnectionOut;
 
-pub async fn upgrade_client<S, D>(connection: larlis_tcp::Connection<S, D>) -> Connection<S, D> {
-    let (connection, stream) = connection.replace_stream(());
-    let stream = TlsConnector::from(Arc::new(client_config()))
-        .connect(IpAddress(connection.remote_addr.ip()), stream.into_inner())
-        .await
-        .unwrap();
-    connection.replace_stream(Client(stream)).0
+#[derive(Clone)]
+pub struct Connector(pub TlsConnector);
+
+impl Default for Connector {
+    fn default() -> Self {
+        Self(TlsConnector::from(Arc::new(client_config())))
+    }
 }
 
-pub struct Accept(pub TlsAcceptor);
+impl Connector {
+    pub async fn upgrade_client<S, D>(
+        &self,
+        connection: larlis_tcp::Connection<S, D>,
+    ) -> Connection<S, D> {
+        let (connection, stream) = connection.replace_stream(());
+        let stream = self
+            .0
+            .connect(IpAddress(connection.remote_addr.ip()), stream.into_inner())
+            .await
+            .unwrap();
+        connection.replace_stream(Client(stream)).0
+    }
+}
 
-impl Default for Accept {
+#[derive(Clone)]
+pub struct Acceptor(pub TlsAcceptor);
+
+impl Default for Acceptor {
     fn default() -> Self {
         Self(TlsAcceptor::from(Arc::new(server_config())))
     }
 }
 
-impl Accept {
+impl Acceptor {
     pub async fn upgrade_server<S, D>(
         &self,
         connection: larlis_tcp::Connection<S, D>,
