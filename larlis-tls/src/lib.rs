@@ -1,6 +1,6 @@
 use std::{io::Cursor, sync::Arc};
 
-use rcgen::{CertificateParams, DistinguishedName, KeyPair, SanType, PKCS_ECDSA_P256_SHA256};
+use rcgen::{CertificateParams, DistinguishedName, KeyPair, SanType, PKCS_ED25519};
 use tokio::net::TcpStream;
 use tokio_rustls::{
     rustls::{
@@ -21,11 +21,11 @@ fn root_store() -> RootCertStore {
 }
 
 fn generate() -> (PrivateKey, Certificate) {
-    let key_pair = KeyPair::generate(&PKCS_ECDSA_P256_SHA256).unwrap();
+    let key_pair = KeyPair::generate(&PKCS_ED25519).unwrap();
     let private_key = PrivateKey(key_pair.serialize_der());
     let mut cert_params = CertificateParams::new(Vec::new());
     cert_params.distinguished_name = DistinguishedName::new();
-    cert_params.alg = &PKCS_ECDSA_P256_SHA256;
+    cert_params.alg = &PKCS_ED25519;
     cert_params.key_pair = Some(key_pair);
     cert_params
         .subject_alt_names

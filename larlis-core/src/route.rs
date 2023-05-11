@@ -25,14 +25,14 @@ impl ClientTable {
             self.routes.insert(identity, SocketAddr::from((host, port)));
         }
     }
-}
 
-impl<K, I> Table<K, I> {
     pub fn addr(&self, index: usize) -> SocketAddr {
         let (&base_index, &host) = self.hosts.range(..=index).last().unwrap();
         SocketAddr::from((host, 50000 + (index - base_index) as u16))
     }
+}
 
+impl<K, I> Table<K, I> {
     pub fn identity(&self, index: usize) -> &K {
         &self.identities[index]
     }
@@ -52,3 +52,5 @@ impl<K, I> Table<K, I> {
         self.identities.is_empty()
     }
 }
+
+pub type ReplicaTable = Table<(), u8>;
