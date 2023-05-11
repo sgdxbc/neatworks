@@ -87,14 +87,15 @@ where
         let mut replies = Vec::from_iter(self.replies.values());
         #[allow(clippy::int_plus_one)] // to match common description of the protocol
         while replies.len() >= self.f + 1 {
-            let result = &replies.pop().unwrap().result;
+            let reply = replies.pop().unwrap();
             let matched;
             (matched, replies) = replies
                 .into_iter()
-                .partition(|reply| &reply.result == result);
+                .partition(|r| (&r.result, r.view_num) == (&reply.result, reply.view_num));
             if matched.len() >= self.f {
                 self.op = None;
-                self.result.update(Result(result.clone()));
+                self.result.update(Result(reply.result.clone()));
+                // TODO update cached view number
                 break;
             }
         }
