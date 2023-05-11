@@ -35,6 +35,19 @@ impl<S, D, T> GeneralConnection<S, D, T> {
             egress: unbounded_channel(),
         }
     }
+
+    pub fn replace_stream<U>(self, stream: U) -> (GeneralConnection<S, D, U>, T) {
+        (
+            GeneralConnection {
+                stream,
+                remote_addr: self.remote_addr,
+                state: self.state,
+                disconnected: self.disconnected,
+                egress: self.egress,
+            },
+            self.stream,
+        )
+    }
 }
 
 impl<S, D> Connection<S, D> {
@@ -50,10 +63,6 @@ impl<S, D> Connection<S, D> {
         let stream = socket.connect(remote_addr).await.unwrap();
         stream.set_nodelay(true).unwrap(); //
         Self::new(BufStream::new(stream), remote_addr, state, disconnected)
-    }
-
-    pub fn stream_ref(&self) -> &TcpStream {
-        self.stream.get_ref()
     }
 }
 

@@ -82,7 +82,7 @@ async fn use_barrier_tcp(addr: SocketAddr, service: SocketAddr) -> Message<UserP
         Wire::default().state(),
     )
     .await;
-    let local_message = connection.stream_ref().local_addr().unwrap().port();
+    let local_message = connection.stream.get_ref().local_addr().unwrap().port();
     let mut dispatch = Dispatch::default();
     dispatch.insert_state(connection.remote_addr, connection.out_state());
     let connection = spawn(async move { connection.start().await });

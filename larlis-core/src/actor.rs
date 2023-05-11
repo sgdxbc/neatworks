@@ -4,6 +4,13 @@ pub trait State<'message> {
     type Message;
 
     fn update(&mut self, message: Self::Message);
+
+    fn boxed(self) -> Box<dyn State<'message, Message = Self::Message>>
+    where
+        Self: Sized + 'static,
+    {
+        Box::new(self)
+    }
 }
 
 impl<'m, T: State<'m>> State<'m> for &mut T {
