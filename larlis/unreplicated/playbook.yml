@@ -44,7 +44,7 @@
       tmux new-session -d -s larlis-unreplicated
       "{{ work_dir }}/larlis-unreplicated 
         --barrier-host {{ groups['service'][0] }}
-        --tcp
+        --tls
         || read _"
 
 - name: Run clients
@@ -61,7 +61,7 @@
       ansible.builtin.shell:
         ./larlis-unreplicated
           --barrier-host {{ groups['service'][0] }}
-          --tcp
+          --tls
           --client-index {{ (groups['client'].index(inventory_hostname) | int) * (some_client_count | int) }}
           --client-count {{ some_client_count }}
           --client-sec 10

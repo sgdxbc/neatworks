@@ -1,11 +1,11 @@
 use std::{io::Cursor, sync::Arc};
 
-use rcgen::{CertificateParams, DistinguishedName, KeyPair, PKCS_ECDSA_P256_SHA256};
+use rcgen::{CertificateParams, DistinguishedName, KeyPair, SanType, PKCS_ECDSA_P256_SHA256};
 use tokio::net::TcpStream;
 use tokio_rustls::{
     rustls::{
         server::AllowAnyAuthenticatedClient, Certificate, ClientConfig, PrivateKey, RootCertStore,
-        ServerConfig, ServerName::IpAddress,
+        ServerConfig, ServerName,
     },
     TlsAcceptor, TlsConnector,
     TlsStream::{self, Client, Server},
@@ -27,6 +27,9 @@ fn generate() -> (PrivateKey, Certificate) {
     cert_params.distinguished_name = DistinguishedName::new();
     cert_params.alg = &PKCS_ECDSA_P256_SHA256;
     cert_params.key_pair = Some(key_pair);
+    cert_params
+        .subject_alt_names
+        .push(SanType::DnsName(String::from("larlis.test")));
     let cert = rcgen::Certificate::from_params(cert_params).unwrap();
     let root_key_pair = KeyPair::from_pem(KEY).unwrap();
     let root_cert = rcgen::Certificate::from_params(
@@ -77,7 +80,10 @@ impl Connector {
         let (connection, stream) = connection.replace_stream(());
         let stream = self
             .0
-            .connect(IpAddress(connection.remote_addr.ip()), stream.into_inner())
+            .connect(
+                ServerName::try_from("larlis.test").unwrap(),
+                stream.into_inner(),
+            )
             .await
             .unwrap();
         connection.replace_stream(Client(stream)).0
