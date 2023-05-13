@@ -1,0 +1,17 @@
+[package]
+name = "wm-barrier"
+version = "0.1.0"
+edition = "2021"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+wm-bincode = { version = "0.1.0", path = "../wm-bincode" }
+wm-core = { version = "0.1.0", path = "../wm-core" }
+wm-tcp = { version = "0.1.0", path = "../wm-tcp" }
+serde = "1.0.162"
+tokio = { version = "1.28.0", features = ["rt"] }
+
+[dev-dependencies]
+wm-udp = { path = "../wm-udp" }
+tokio = { version = "1.28.0", features = ["macros"] }

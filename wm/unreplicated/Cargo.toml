@@ -1,0 +1,16 @@
+[package]
+name = "wm-unreplicated"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+clap = { version = "4.2.7", features = ["derive"] }
+wm-barrier = { version = "0.1.0", path = "../../wm-barrier" }
+wm-bincode = { version = "0.1.0", path = "../../wm-bincode" }
+wm-core = { version = "0.1.0", path = "../../wm-core" }
+wm-tcp = { version = "0.1.0", path = "../../wm-tcp" }
+wm-tls = { version = "0.1.0", path = "../../wm-tls" }
+wm-udp = { version = "0.1.0", path = "../../wm-udp" }
+rand = "0.8.5"
+serde = { version = "1.0.160", features = ["derive"] }
+tokio = { version = "1.27.0", features = ["macros", "rt-multi-thread", "signal", "time"] }

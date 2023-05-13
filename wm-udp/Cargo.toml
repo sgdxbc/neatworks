@@ -1,0 +1,10 @@
+[package]
+name = "wm-udp"
+version = "0.1.0"
+edition = "2021"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+wm-core = { version = "0.1.0", path = "../wm-core" }
+tokio = { version = "1.27.0", features = ["net", "rt"] }
