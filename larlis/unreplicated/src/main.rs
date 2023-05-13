@@ -130,7 +130,7 @@ async fn run_clients_udp(cli: Cli, route: route::ClientTable, replica_addr: Sock
 async fn run_replica_udp(_cli: Cli, route: route::ClientTable, replica_addr: SocketAddr) {
     let egress = larlis_udp::Out::bind(replica_addr).await;
 
-    let app = larlis_unreplicated::App(Null).install(
+    let app = larlis_unreplicated::App::from(Null).install_filtered(
         Closure::from(move |(id, message)| (route.lookup_addr(id), message))
             .install(ser().install(egress.clone())),
     );
@@ -243,7 +243,7 @@ async fn run_replica_tcp(_cli: Cli, route: route::ClientTable, replica_addr: Soc
         spawn(async move { connection.start().await });
     }
 
-    let app = larlis_unreplicated::App(Null).install(
+    let app = larlis_unreplicated::App::from(Null).install_filtered(
         Closure::from(move |(id, message)| (route.lookup_addr(id), message))
             .install(ser().install(Closure::from(From::from).install(dispatch))),
     );
@@ -357,7 +357,7 @@ async fn run_replica_tls(_cli: Cli, route: route::ClientTable, replica_addr: Soc
         spawn(async move { connection.start().await });
     }
 
-    let app = larlis_unreplicated::App(Null).install(
+    let app = larlis_unreplicated::App::from(Null).install_filtered(
         Closure::from(move |(id, message)| (route.lookup_addr(id), message))
             .install(ser().install(Closure::from(From::from).install(dispatch))),
     );

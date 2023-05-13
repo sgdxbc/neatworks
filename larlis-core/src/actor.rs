@@ -11,6 +11,13 @@ pub trait State<'message> {
     {
         Box::new(self)
     }
+
+    fn filtered(self) -> Filtered<Self>
+    where
+        Self: Sized,
+    {
+        Filtered(self)
+    }
 }
 
 impl<'m, T: State<'m>> State<'m> for &mut T {
@@ -95,6 +102,21 @@ impl<M> Drive<M> {
     pub async fn run(&mut self, mut state: impl State<'_, Message = M>) {
         while let Some(message) = self.0.recv().await {
             state.update(message)
+        }
+    }
+}
+
+pub struct Filtered<S>(pub S);
+
+impl<'m, S> State<'m> for Filtered<S>
+where
+    S: State<'m>,
+{
+    type Message = Option<S::Message>; // TODO can generalize `Option<_>` into `impl Into<_>`?
+
+    fn update(&mut self, message: Self::Message) {
+        if let Some(message) = message {
+            self.0.update(message)
         }
     }
 }

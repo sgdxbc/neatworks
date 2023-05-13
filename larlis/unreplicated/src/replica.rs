@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use larlis_core::{actor, app};
 
 use crate::{Reply, Request};
@@ -38,21 +40,41 @@ where
     }
 }
 
-pub struct App<A>(pub A);
+pub struct App<A> {
+    pub state: A,
+    replies: HashMap<u32, Reply>,
+}
+
+impl<A> From<A> for App<A> {
+    fn from(value: A) -> Self {
+        Self {
+            state: value,
+            replies: Default::default(),
+        }
+    }
+}
 
 impl<A> app::PureState<'_> for App<A>
 where
     A: larlis_core::App + 'static,
 {
     type Input = Upcall;
-    type Output<'a> = (u32, Reply);
+    type Output<'a> = Option<(u32, Reply)>;
 
     fn update(&mut self, input: Self::Input) -> Self::Output<'_> {
-        let result = self.0.update(input.op_num, &input.op);
+        match self.replies.get(&input.client_id) {
+            Some(reply) if reply.request_num > input.request_num => return None,
+            Some(reply) if reply.request_num == input.request_num => {
+                return Some((input.client_id, reply.clone()))
+            }
+            _ => {}
+        }
+        let result = self.state.update(input.op_num, &input.op);
         let message = Reply {
             request_num: input.request_num,
             result,
         };
-        (input.client_id, message)
+        self.replies.insert(input.client_id, message.clone());
+        Some((input.client_id, message))
     }
 }

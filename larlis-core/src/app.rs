@@ -1,6 +1,6 @@
 use std::marker::PhantomData;
 
-use crate::actor::{SharedClone, State};
+use crate::actor::{Filtered, SharedClone, State};
 
 pub trait PureState<'input> {
     type Input;
@@ -15,6 +15,13 @@ pub trait PureState<'input> {
         Self: Sized,
     {
         Install(self, state)
+    }
+
+    fn install_filtered<S>(self, state: S) -> Install<Self, Filtered<S>>
+    where
+        Self: Sized,
+    {
+        Install(self, Filtered(state))
     }
 }
 
