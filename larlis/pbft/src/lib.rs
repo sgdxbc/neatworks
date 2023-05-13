@@ -15,5 +15,5 @@ pub struct Reply {
     request_num: u32,
     result: Vec<u8>,
     replica_id: u8,
-    view_num: u32,
+    view_num: u16,
 }
