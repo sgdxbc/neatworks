@@ -1,8 +1,20 @@
+// design choice: unreliable network torlarance, i.e. resending
+// `(Pre)Prepare` and `Commit` messages serve dual purposes: a local certificate
+// for certain proposal (as defined in paper), and a demand indicator.
+// That is, (re)sending `(Pre)Prepare` also means sender is querying `Prepare`,
+// and (re)sending `Commit` also means sender is querying `Commit`.
+
 use std::collections::HashMap;
 
 use bincode::Options;
 use serde::{Deserialize, Serialize};
-use wm_core::{actor, app};
+use wm_core::{
+    actor, app,
+    timeout::{
+        self,
+        Message::{Set, Unset},
+    },
+};
 
 use crate::{Reply, Request};
 
@@ -83,12 +95,20 @@ pub struct Commit {
     replica_id: u8,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Egress {
     To(u8, ToReplica),
     ToAll(ToReplica), // except self
 }
 
-pub struct Replica<U, E> {
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum Timeout {
+    // view change
+    Prepare(OpNum),
+    Commit(OpNum),
+}
+
+pub struct Replica<U, E, T> {
     id: u8,
     n: usize,
     f: usize,
@@ -106,10 +126,11 @@ pub struct Replica<U, E> {
 
     pub upcall: U,
     pub egress: E,
+    pub timeout: T,
 }
 
-impl<U, E> Replica<U, E> {
-    pub fn new(id: u8, n: usize, f: usize, upcall: U, egress: E) -> Self {
+impl<U, E, T> Replica<U, E, T> {
+    pub fn new(id: u8, n: usize, f: usize, upcall: U, egress: E, timeout: T) -> Self {
         #[allow(clippy::int_plus_one)] // to conform conventional statement
         {
             assert!(n >= 3 * f + 1);
@@ -128,14 +149,16 @@ impl<U, E> Replica<U, E> {
             execute_number: 0,
             upcall,
             egress,
+            timeout,
         }
     }
 }
 
-impl<U, E> actor::State<'_> for Replica<U, E>
+impl<U, E, T> actor::State<'_> for Replica<U, E, T>
 where
     U: for<'m> actor::State<'m, Message = Upcall<'m>>,
     E: for<'m> actor::State<'m, Message = Egress>,
+    T: for<'m> actor::State<'m, Message = timeout::Message<Timeout>>,
 {
     type Message = ToReplica;
 
@@ -149,7 +172,7 @@ where
     }
 }
 
-impl<U, E> Replica<U, E> {
+impl<U, E, T> Replica<U, E, T> {
     fn primary_id(&self) -> u8 {
         (self.view_num as usize % self.n) as _
     }
@@ -194,10 +217,11 @@ fn digest(request: &[Request]) -> [u8; 32] {
     sha2::Sha256::digest(bincode::options().serialize(request).unwrap()).into()
 }
 
-impl<U, E> Replica<U, E>
+impl<U, E, T> Replica<U, E, T>
 where
     U: for<'m> actor::State<'m, Message = Upcall<'m>>,
     E: for<'m> actor::State<'m, Message = Egress>,
+    T: for<'m> actor::State<'m, Message = timeout::Message<Timeout>>,
 {
     fn handle_request(&mut self, message: Request) {
         if self.id != self.primary_id() {
@@ -239,7 +263,7 @@ where
             pre_prepare.clone(),
             requests.clone(),
         )));
-        // TODO resend timer
+        self.timeout.update(Set(Timeout::Prepare(self.op_num)));
         self.pre_prepares
             .insert(self.op_num, (pre_prepare, requests));
         assert!(!self.prepared.contains_key(&self.op_num));
@@ -255,7 +279,7 @@ where
             self.view_num = message.view_num;
         }
         if let Some((pre_prepare, _)) = self.pre_prepares.get(&message.op_num) {
-            //
+            // dedicated reply to late sender
             let prepare = Prepare {
                 view_num: self.view_num,
                 op_num: message.op_num,
@@ -287,7 +311,7 @@ where
         };
         self.egress
             .update(Egress::ToAll(ToReplica::Prepare(prepare.clone())));
-        // TODO resend timer
+        self.timeout.update(Set(Timeout::Prepare(op_num)));
         self.insert_prepare(prepare);
     }
 
@@ -299,8 +323,16 @@ where
             // TODO
             self.view_num = message.view_num;
         }
-        if let Some(_p) = self.prepared_slot(message.op_num) {
-            // TODO resend for late message source
+        if let Some((digest, _)) = self.prepared_slot(message.op_num) {
+            // dedicated reply to late sender
+            let prepare = Prepare {
+                view_num: self.view_num,
+                op_num: message.op_num,
+                digest,
+                replica_id: self.id,
+            };
+            self.egress
+                .update(Egress::To(message.replica_id, ToReplica::Prepare(prepare)));
             return;
         }
         if let Some((pre_prepare, _)) = self.pre_prepares.get(&message.op_num) {
@@ -321,8 +353,16 @@ where
             // TODO
             self.view_num = message.view_num;
         }
-        if let Some(_c) = self.committed_slot(message.op_num) {
-            // TODO resend for late message source
+        if let Some((digest, _)) = self.committed_slot(message.op_num) {
+            // dedicated reply to late sender
+            let commit = Commit {
+                view_num: self.view_num,
+                op_num: message.op_num,
+                digest,
+                replica_id: self.id,
+            };
+            self.egress
+                .update(Egress::To(message.replica_id, ToReplica::Commit(commit)));
             return;
         }
         if let Some((pre_prepare, _)) = self.pre_prepares.get(&message.op_num) {
@@ -351,6 +391,8 @@ where
             };
             self.egress
                 .update(Egress::ToAll(ToReplica::Commit(commit.clone())));
+            self.timeout.update(Unset(Timeout::Prepare(op_num)));
+            self.timeout.update(Set(Timeout::Commit(op_num)));
             self.insert_commit(commit);
 
             // TODO adaptive batching
@@ -364,12 +406,15 @@ where
             .entry(op_num)
             .or_default()
             .insert(commit.replica_id, commit);
-
-        self.execute();
+        if self.committed_slot(op_num).is_some() {
+            self.timeout.update(Unset(Timeout::Commit(op_num)));
+            self.execute();
+        }
     }
 
     fn execute(&mut self) {
         while let Some((_, requests)) = self.committed_slot(self.execute_number + 1) {
+            // alternative: move `requests` from `pre_prepares` to `log`
             let requests = requests.to_vec();
             self.log.push(requests.clone());
             for request in requests {
