@@ -101,6 +101,12 @@ pub enum Egress {
     ToAll(ToReplica), // except self
 }
 
+impl Egress {
+    fn to(replica_id: u8) -> impl Fn(ToReplica) -> Self {
+        move |m| Self::To(replica_id, m)
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum Timeout {
     // view change
@@ -177,8 +183,8 @@ impl<U, E, T> Replica<U, E, T> {
         (self.view_num as usize % self.n) as _
     }
 
-    fn prepared_slot(&self, op_num: OpNum) -> Option<([u8; 32], &[Request])> {
-        let Some((pre_prepare, requests)) = self.pre_prepares.get(&op_num) else {
+    fn prepared_slot(&self, op_num: OpNum) -> Option<&[Request]> {
+        let Some((_, requests)) = self.pre_prepares.get(&op_num) else {
             return None;
         };
         if self
@@ -186,15 +192,16 @@ impl<U, E, T> Replica<U, E, T> {
             .get(&op_num)
             .unwrap_or(&Default::default())
             .len()
+            + 1 // self vote is implied
             >= self.n - self.f
         {
-            Some((pre_prepare.digest, requests))
+            Some(requests)
         } else {
             None
         }
     }
 
-    fn committed_slot(&self, op_num: OpNum) -> Option<([u8; 32], &[Request])> {
+    fn committed_slot(&self, op_num: OpNum) -> Option<&[Request]> {
         let Some(slot) = self.prepared_slot(op_num) else {
             return None;
         };
@@ -203,6 +210,7 @@ impl<U, E, T> Replica<U, E, T> {
             .get(&op_num)
             .unwrap_or(&Default::default())
             .len()
+            + 1 // self vote is implied
             >= self.n - self.f
         {
             Some(slot)
@@ -259,13 +267,10 @@ where
             op_num: self.op_num,
             digest: digest(&requests),
         };
-        self.egress.update(Egress::ToAll(ToReplica::PrePrepare(
-            pre_prepare.clone(),
-            requests.clone(),
-        )));
-        self.timeout.update(Set(Timeout::Prepare(self.op_num)));
         self.pre_prepares
             .insert(self.op_num, (pre_prepare, requests));
+        self.send_pre_prepare(self.op_num);
+        self.timeout.update(Set(Timeout::Prepare(self.op_num)));
         assert!(!self.prepared.contains_key(&self.op_num));
         assert!(!self.committed.contains_key(&self.op_num));
     }
@@ -278,16 +283,9 @@ where
             // TODO
             self.view_num = message.view_num;
         }
-        if let Some((pre_prepare, _)) = self.pre_prepares.get(&message.op_num) {
+        if self.pre_prepares.contains_key(&message.op_num) {
             // dedicated reply to late sender
-            let prepare = Prepare {
-                view_num: self.view_num,
-                op_num: message.op_num,
-                digest: pre_prepare.digest,
-                replica_id: self.id,
-            };
-            self.egress
-                .update(Egress::To(self.primary_id(), ToReplica::Prepare(prepare)));
+            self.send_prepare(message.op_num, Egress::to(self.primary_id()));
             return;
         }
         // TODO watermark
@@ -303,16 +301,10 @@ where
             committed.retain(|_, commit| commit.digest == digest);
         }
 
-        let prepare = Prepare {
-            view_num: self.view_num,
-            op_num,
-            digest,
-            replica_id: self.id,
-        };
-        self.egress
-            .update(Egress::ToAll(ToReplica::Prepare(prepare.clone())));
+        self.send_prepare(op_num, Egress::ToAll);
         self.timeout.update(Set(Timeout::Prepare(op_num)));
-        self.insert_prepare(prepare);
+        // `pre_prepares` implies the insertion
+        // self.insert_prepare(prepare);
     }
 
     fn handle_prepare(&mut self, message: Prepare) {
@@ -323,16 +315,9 @@ where
             // TODO
             self.view_num = message.view_num;
         }
-        if let Some((digest, _)) = self.prepared_slot(message.op_num) {
+        if self.prepared_slot(message.op_num).is_some() {
             // dedicated reply to late sender
-            let prepare = Prepare {
-                view_num: self.view_num,
-                op_num: message.op_num,
-                digest,
-                replica_id: self.id,
-            };
-            self.egress
-                .update(Egress::To(message.replica_id, ToReplica::Prepare(prepare)));
+            self.send_prepare(message.op_num, Egress::to(message.replica_id));
             return;
         }
         if let Some((pre_prepare, _)) = self.pre_prepares.get(&message.op_num) {
@@ -353,16 +338,9 @@ where
             // TODO
             self.view_num = message.view_num;
         }
-        if let Some((digest, _)) = self.committed_slot(message.op_num) {
+        if self.committed_slot(message.op_num).is_some() {
             // dedicated reply to late sender
-            let commit = Commit {
-                view_num: self.view_num,
-                op_num: message.op_num,
-                digest,
-                replica_id: self.id,
-            };
-            self.egress
-                .update(Egress::To(message.replica_id, ToReplica::Commit(commit)));
+            self.send_commit(message.op_num, Egress::to(message.replica_id));
             return;
         }
         if let Some((pre_prepare, _)) = self.pre_prepares.get(&message.op_num) {
@@ -375,6 +353,34 @@ where
         self.insert_commit(message);
     }
 
+    fn send_pre_prepare(&mut self, op_num: OpNum) {
+        assert_eq!(self.id, self.primary_id());
+        let (pre_prepare, requests) = self.pre_prepares[&op_num].clone();
+        self.egress
+            .update(Egress::ToAll(ToReplica::PrePrepare(pre_prepare, requests)));
+    }
+
+    fn send_prepare(&mut self, op_num: OpNum, to_whom: impl FnOnce(ToReplica) -> Egress) {
+        assert_ne!(self.id, self.primary_id());
+        let prepare = Prepare {
+            view_num: self.view_num,
+            op_num,
+            digest: self.pre_prepares[&op_num].0.digest,
+            replica_id: self.id,
+        };
+        self.egress.update(to_whom(ToReplica::Prepare(prepare)));
+    }
+
+    fn send_commit(&mut self, op_num: OpNum, to_whom: impl FnOnce(ToReplica) -> Egress) {
+        let commit = Commit {
+            view_num: self.view_num,
+            op_num,
+            digest: self.pre_prepares[&op_num].0.digest,
+            replica_id: self.id,
+        };
+        self.egress.update(to_whom(ToReplica::Commit(commit)));
+    }
+
     fn insert_prepare(&mut self, prepare: Prepare) {
         assert!(self.prepared_slot(prepare.op_num).is_none());
         let op_num = prepare.op_num;
@@ -382,18 +388,12 @@ where
             .entry(op_num)
             .or_default()
             .insert(prepare.replica_id, prepare);
-        if let Some((digest, _)) = self.prepared_slot(op_num) {
-            let commit = Commit {
-                view_num: self.view_num,
-                op_num,
-                digest,
-                replica_id: self.id,
-            };
-            self.egress
-                .update(Egress::ToAll(ToReplica::Commit(commit.clone())));
+        if self.prepared_slot(op_num).is_some() {
+            self.send_commit(op_num, Egress::ToAll);
             self.timeout.update(Unset(Timeout::Prepare(op_num)));
             self.timeout.update(Set(Timeout::Commit(op_num)));
-            self.insert_commit(commit);
+            // `pre_prepares` implies the insertion
+            // self.insert_commit(commit);
 
             // TODO adaptive batching
         }
@@ -413,7 +413,7 @@ where
     }
 
     fn execute(&mut self) {
-        while let Some((_, requests)) = self.committed_slot(self.execute_number + 1) {
+        while let Some(requests) = self.committed_slot(self.execute_number + 1) {
             // alternative: move `requests` from `pre_prepares` to `log`
             let requests = requests.to_vec();
             self.log.push(requests.clone());
