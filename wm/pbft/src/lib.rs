@@ -1,4 +1,5 @@
 pub mod client;
+pub mod crypto;
 pub mod replica;
 
 use serde::{Deserialize, Serialize};

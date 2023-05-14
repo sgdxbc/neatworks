@@ -3,7 +3,6 @@
 // for certain proposal (as defined in paper), and a demand indicator.
 // That is, (re)sending `(Pre)Prepare` also means sender is querying `Prepare`,
 // and (re)sending `Commit` also means sender is querying `Commit`.
-
 use std::collections::HashMap;
 
 use bincode::Options;
@@ -70,11 +69,13 @@ pub enum ToReplica {
     PrePrepare(PrePrepare, Vec<Request>),
     Prepare(Prepare),
     Commit(Commit),
+
+    Timeout(Timeout), //
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PrePrepare {
-    view_num: ViewNum,
+    pub(crate) view_num: ViewNum,
     op_num: OpNum,
     digest: [u8; 32],
 }
@@ -84,7 +85,7 @@ pub struct Prepare {
     view_num: ViewNum,
     op_num: OpNum,
     digest: [u8; 32],
-    replica_id: u8,
+    pub(crate) replica_id: u8,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -92,7 +93,7 @@ pub struct Commit {
     view_num: ViewNum,
     op_num: OpNum,
     digest: [u8; 32],
-    replica_id: u8,
+    pub(crate) replica_id: u8,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -107,11 +108,11 @@ impl Egress {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub enum Timeout {
     // view change
-    Prepare(OpNum),
-    Commit(OpNum),
+    Prepare(ViewNum, OpNum),
+    Commit(ViewNum, OpNum),
 }
 
 pub struct Replica<U, E, T> {
@@ -174,6 +175,26 @@ where
             ToReplica::PrePrepare(message, requests) => self.handle_pre_prepare(message, requests),
             ToReplica::Prepare(message) => self.handle_prepare(message),
             ToReplica::Commit(message) => self.handle_commit(message),
+
+            ToReplica::Timeout(Timeout::Prepare(view_num, op_num))
+                if view_num == self.view_num && self.prepared_slot(op_num).is_none() =>
+            {
+                //
+                if self.id == self.primary_id() {
+                    self.send_pre_prepare(op_num)
+                } else {
+                    self.send_prepare(op_num, Egress::ToAll)
+                }
+                self.timeout.update(Set(Timeout::Prepare(view_num, op_num)))
+            }
+            ToReplica::Timeout(Timeout::Commit(view_num, op_num))
+                if view_num == self.view_num && self.committed_slot(op_num).is_none() =>
+            {
+                //
+                self.send_commit(op_num, Egress::ToAll);
+                self.timeout.update(Set(Timeout::Commit(view_num, op_num)))
+            }
+            ToReplica::Timeout(_) => {}
         }
     }
 }
@@ -220,9 +241,9 @@ impl<U, E, T> Replica<U, E, T> {
     }
 }
 
-fn digest(request: &[Request]) -> [u8; 32] {
+fn digest(requests: &[Request]) -> [u8; 32] {
     use sha2::Digest;
-    sha2::Sha256::digest(bincode::options().serialize(request).unwrap()).into()
+    sha2::Sha256::digest(bincode::options().serialize(requests).unwrap()).into()
 }
 
 impl<U, E, T> Replica<U, E, T>
@@ -270,7 +291,8 @@ where
         self.pre_prepares
             .insert(self.op_num, (pre_prepare, requests));
         self.send_pre_prepare(self.op_num);
-        self.timeout.update(Set(Timeout::Prepare(self.op_num)));
+        self.timeout
+            .update(Set(Timeout::Prepare(self.view_num, self.op_num)));
         assert!(!self.prepared.contains_key(&self.op_num));
         assert!(!self.committed.contains_key(&self.op_num));
     }
@@ -302,7 +324,8 @@ where
         }
 
         self.send_prepare(op_num, Egress::ToAll);
-        self.timeout.update(Set(Timeout::Prepare(op_num)));
+        self.timeout
+            .update(Set(Timeout::Prepare(self.view_num, op_num)));
         // `pre_prepares` implies the insertion
         // self.insert_prepare(prepare);
     }
@@ -390,8 +413,10 @@ where
             .insert(prepare.replica_id, prepare);
         if self.prepared_slot(op_num).is_some() {
             self.send_commit(op_num, Egress::ToAll);
-            self.timeout.update(Unset(Timeout::Prepare(op_num)));
-            self.timeout.update(Set(Timeout::Commit(op_num)));
+            self.timeout
+                .update(Unset(Timeout::Prepare(self.view_num, op_num)));
+            self.timeout
+                .update(Set(Timeout::Commit(self.view_num, op_num)));
             // `pre_prepares` implies the insertion
             // self.insert_commit(commit);
 
@@ -407,7 +432,8 @@ where
             .or_default()
             .insert(commit.replica_id, commit);
         if self.committed_slot(op_num).is_some() {
-            self.timeout.update(Unset(Timeout::Commit(op_num)));
+            self.timeout
+                .update(Unset(Timeout::Commit(self.view_num, op_num)));
             self.execute();
         }
     }
