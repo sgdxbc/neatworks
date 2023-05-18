@@ -1,0 +1,129 @@
+use std::{marker::PhantomData, time::Duration};
+
+use tokio::{
+    select, spawn,
+    sync::mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender},
+    task::JoinHandle,
+    time::{sleep, Instant},
+};
+use wm_core::{actor::State, app::PureState, dispatch, timeout};
+
+#[derive(Debug)]
+pub struct Sleeper<T> {
+    task: JoinHandle<()>,
+    reset: UnboundedSender<()>,
+    _timeout: PhantomData<T>,
+}
+
+impl<T> Sleeper<T> {
+    fn spawn(duration: Duration, wake: flume::Sender<T>, timeout: T) -> Self
+    where
+        T: Send + 'static,
+    {
+        let reset = unbounded_channel();
+        Self {
+            task: spawn(Self::run(duration, reset.1, wake, timeout)),
+            reset: reset.0,
+            _timeout: PhantomData,
+        }
+    }
+
+    async fn run(
+        duration: Duration,
+        mut reset: UnboundedReceiver<()>,
+        wake: flume::Sender<T>,
+        timeout: T,
+    ) {
+        let sleep = sleep(duration);
+        tokio::pin!(sleep);
+        loop {
+            select! {
+                _ = &mut sleep => break,
+                result = reset.recv() => if result.is_some() {
+                    sleep.as_mut().reset(Instant::now() + duration);
+                } else {
+                    return; // unset timeout cause `reset` sender get dropped
+                }
+            }
+        }
+        // any further reset is ignored, which should be fine
+        // a rendezvous `wake` channel is used to ensure that unset timeout is
+        // never waked, hope it works as i expect
+        if wake.send_async(timeout).await.is_err() {
+            //
+        }
+    }
+}
+
+pub enum Message {
+    Reset,
+    Unset,
+}
+
+impl<T> State<'_> for Sleeper<T> {
+    type Message = Message;
+
+    fn update(&mut self, message: Self::Message) {
+        // check no previous Unset?
+        match message {
+            Message::Reset => {
+                if self.reset.send(()).is_err() {
+                    //
+                }
+            }
+            Message::Unset => self.task.abort(),
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct Waker<T, S> {
+    wake: flume::Receiver<T>,
+    pub state: S,
+}
+
+impl<T, S> Waker<T, S> {
+    pub async fn start(&mut self)
+    where
+        S: for<'m> State<'m, Message = T>,
+    {
+        while let Ok(timeout) = self.wake.recv_async().await {
+            self.state.update(timeout)
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct Control<T>(flume::Sender<T>);
+
+// can we turn this into a `From` impl?
+pub fn new<S, T>(state: S) -> (Waker<T, S>, Control<T>) {
+    let wake = flume::bounded(0);
+    (
+        Waker {
+            wake: wake.1,
+            state,
+        },
+        Control(wake.0),
+    )
+}
+
+impl<T> PureState<'_> for Control<T>
+where
+    T: Clone + Send + 'static,
+{
+    type Input = timeout::Message<T>;
+    type Output<'output> = dispatch::Message<T, Sleeper<T>, Message> where Self: 'output;
+
+    fn update(&mut self, input: Self::Input) -> Self::Output<'_> {
+        use {dispatch::Message::*, timeout::Message::*};
+        match input {
+            Set(timeout) => Insert(
+                timeout.clone(),
+                Sleeper::spawn(Default::default(), self.0.clone(), timeout),
+            ),
+            Reset(timeout) => Update(timeout, Message::Reset),
+            Unset(timeout) => Remove(timeout),
+        }
+    }
+}

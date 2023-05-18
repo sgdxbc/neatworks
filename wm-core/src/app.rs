@@ -98,3 +98,20 @@ where
     S: SharedClone,
 {
 }
+
+pub struct Inspect<S>(pub S);
+
+impl<'m, S> PureState<'m> for Inspect<S>
+where
+    S: State<'m>,
+    S::Message: Clone,
+{
+    type Input = S::Message;
+    // probably need to adjust
+    type Output<'output> = S::Message where Self: 'output;
+
+    fn update(&mut self, input: Self::Input) -> Self::Output<'_> {
+        self.0.update(input.clone());
+        input
+    }
+}
