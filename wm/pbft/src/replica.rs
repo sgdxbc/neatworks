@@ -176,9 +176,9 @@ where
             ToReplica::Prepare(message) => self.handle_prepare(message),
             ToReplica::Commit(message) => self.handle_commit(message),
 
-            ToReplica::Timeout(Timeout::Prepare(view_num, op_num))
-                if view_num == self.view_num && self.prepared_slot(op_num).is_none() =>
-            {
+            ToReplica::Timeout(Timeout::Prepare(view_num, op_num)) => {
+                assert_eq!(self.view_num, view_num);
+                assert!(self.prepared_slot(op_num).is_none());
                 //
                 if self.id == self.primary_id() {
                     self.send_pre_prepare(op_num)
@@ -187,14 +187,13 @@ where
                 }
                 self.timeout.update(Set(Timeout::Prepare(view_num, op_num)))
             }
-            ToReplica::Timeout(Timeout::Commit(view_num, op_num))
-                if view_num == self.view_num && self.committed_slot(op_num).is_none() =>
-            {
+            ToReplica::Timeout(Timeout::Commit(view_num, op_num)) => {
+                assert_eq!(self.view_num, view_num);
+                assert!(self.committed_slot(op_num).is_none());
                 //
                 self.send_commit(op_num, Egress::ToAll);
                 self.timeout.update(Set(Timeout::Commit(view_num, op_num)))
             }
-            ToReplica::Timeout(_) => {}
         }
     }
 }
