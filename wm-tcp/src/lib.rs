@@ -76,7 +76,7 @@ impl<S, D, T> GeneralConnection<S, D, T> {
 
     pub async fn start(&mut self)
     where
-        S: for<'m> State<'m, Message = transport::Message<'m>>,
+        S: for<'m> State<'m, Message = transport::Message<&'m [u8]>>,
         D: for<'m> State<'m, Message = Disconnected>,
         // require Unpin or pin it locally?
         T: AsyncRead + AsyncWrite + Unpin,

@@ -18,7 +18,7 @@ use wm_core::{
     actor::{Drive, State, Wire},
     app::{Closure, PureState},
     route::ClientTable,
-    App, Dispatch,
+    transport, App, Dispatch,
 };
 use wm_unreplicated::{client, Client, Replica};
 
@@ -65,7 +65,7 @@ async fn run_clients_udp(cli: Cli, route: ClientTable, replica_addr: SocketAddr)
         let egress = wm_udp::Out::bind(client_addr).await;
         let mut ingress = wm_udp::In::new(
             &egress,
-            de().install(
+            transport::Lift(de()).install(
                 Closure::from(|(_, message)| Message::Handle(message)).install(client_wire.state()),
             ),
         );
@@ -76,7 +76,8 @@ async fn run_clients_udp(cli: Cli, route: ClientTable, replica_addr: SocketAddr)
         };
         let mut client = Client::new(
             client_id,
-            Closure::from(move |message| (replica_addr, message)).install(ser().install(egress)),
+            Closure::from(move |message| (replica_addr, message))
+                .install(transport::Lift(ser()).install(egress)),
             workload,
         );
         clients.push(spawn(async move {
@@ -127,13 +128,13 @@ async fn run_replica_udp(_cli: Cli, route: ClientTable, replica_addr: SocketAddr
 
     let app = wm_unreplicated::App::from(Null).install_filtered(
         Closure::from(move |(id, message)| (route.lookup_addr(id), message))
-            .install(ser().install(egress.clone())),
+            .install(transport::Lift(ser()).install(egress.clone())),
     );
     let mut replica = Replica::new(app);
 
     let mut ingress = wm_udp::In::new(
         &egress,
-        de().install(Closure::from(|(_, message)| message).install(&mut replica)),
+        transport::Lift(de()).install(Closure::from(|(_, message)| message).install(&mut replica)),
     );
     select! {
         _ = ingress.start() => unreachable!(),
@@ -158,7 +159,7 @@ async fn run_clients_tcp(cli: Cli, route: ClientTable, replica_addr: SocketAddr)
         let mut connection = wm_tcp::Connection::connect(
             client_addr,
             replica_addr,
-            de().install(
+            transport::Lift(de()).install(
                 Closure::from(|(_, message)| Message::Handle(message)).install(client_wire.state()),
             ),
             Wire::default().state(),
@@ -175,8 +176,9 @@ async fn run_clients_tcp(cli: Cli, route: ClientTable, replica_addr: SocketAddr)
         };
         let mut client = Client::new(
             client_id,
-            Closure::from(move |message| (replica_addr, message))
-                .install(ser().install(Closure::from(From::from).install(dispatch))),
+            Closure::from(move |message| (replica_addr, message)).install(
+                transport::Lift(ser()).install(Closure::from(From::from).install(dispatch)),
+            ),
             workload,
         );
         clients.push(spawn(async move {
@@ -230,7 +232,8 @@ async fn run_replica_tcp(_cli: Cli, route: ClientTable, replica_addr: SocketAddr
     for _ in 0..route.len() {
         let mut connection = listener
             .accept(
-                de().install(Closure::from(|(_, message)| message).install(replica_wire.state())),
+                transport::Lift(de())
+                    .install(Closure::from(|(_, message)| message).install(replica_wire.state())),
                 disconnected.state(),
             )
             .await;
@@ -240,7 +243,7 @@ async fn run_replica_tcp(_cli: Cli, route: ClientTable, replica_addr: SocketAddr
 
     let app = wm_unreplicated::App::from(Null).install_filtered(
         Closure::from(move |(id, message)| (route.lookup_addr(id), message))
-            .install(ser().install(Closure::from(From::from).install(dispatch))),
+            .install(transport::Lift(ser()).install(Closure::from(From::from).install(dispatch))),
     );
     let mut replica = Replica::new(app);
 
@@ -267,7 +270,7 @@ async fn run_clients_tls(cli: Cli, route: ClientTable, replica_addr: SocketAddr)
         let connection = wm_tcp::Connection::connect(
             client_addr,
             replica_addr,
-            de().install(
+            transport::Lift(de()).install(
                 Closure::from(|(_, message)| Message::Handle(message)).install(client_wire.state()),
             ),
             Wire::default().state(),
@@ -287,8 +290,9 @@ async fn run_clients_tls(cli: Cli, route: ClientTable, replica_addr: SocketAddr)
         };
         let mut client = Client::new(
             client_id,
-            Closure::from(move |message| (replica_addr, message))
-                .install(ser().install(Closure::from(From::from).install(dispatch))),
+            Closure::from(move |message| (replica_addr, message)).install(
+                transport::Lift(ser()).install(Closure::from(From::from).install(dispatch)),
+            ),
             workload,
         );
         clients.push(spawn(async move {
@@ -343,7 +347,8 @@ async fn run_replica_tls(_cli: Cli, route: ClientTable, replica_addr: SocketAddr
     for _ in 0..route.len() {
         let connection = listener
             .accept(
-                de().install(Closure::from(|(_, message)| message).install(replica_wire.state())),
+                transport::Lift(de())
+                    .install(Closure::from(|(_, message)| message).install(replica_wire.state())),
                 disconnected.state(),
             )
             .await;
@@ -354,7 +359,7 @@ async fn run_replica_tls(_cli: Cli, route: ClientTable, replica_addr: SocketAddr
 
     let app = wm_unreplicated::App::from(Null).install_filtered(
         Closure::from(move |(id, message)| (route.lookup_addr(id), message))
-            .install(ser().install(Closure::from(From::from).install(dispatch))),
+            .install(transport::Lift(ser()).install(Closure::from(From::from).install(dispatch))),
     );
     let mut replica = Replica::new(app);
 

@@ -9,7 +9,7 @@ use wm_bincode::{de, ser};
 use wm_core::{
     actor::{Drive, State, Wire},
     app::{Closure, PureState},
-    Dispatch,
+    transport, Dispatch,
 };
 
 /// if `M` is `Ord`, then a sorted `Message<M>` will have deterministic content.
@@ -70,7 +70,8 @@ where
     let mut connection = wm_tcp::Connection::connect(
         addr,
         service,
-        de().install(Closure::from(|(_, message)| message).install(message.state())),
+        transport::Lift(de())
+            .install(Closure::from(|(_, message)| message).install(message.state())),
         Wire::default().state(),
     )
     .await;
@@ -78,7 +79,7 @@ where
     dispatch.insert_state(connection.remote_addr, connection.out_state());
     let connection = spawn(async move { connection.start().await });
 
-    ser()
+    transport::Lift(ser())
         .install(Closure::from(From::from).install(dispatch))
         .update((service, payload));
 
@@ -100,13 +101,16 @@ where
     let mut connections = Vec::new();
     for _ in 0..count {
         let mut connection = listener
-            .accept(de::<M>().install(app_wire.state()), disconnected.state())
+            .accept(
+                transport::Lift(de::<M>()).install(app_wire.state()),
+                disconnected.state(),
+            )
             .await;
         dispatch.insert_state(connection.remote_addr, connection.out_state());
         connections.push(spawn(async move { connection.start().await }));
     }
     let app = Service::new(
-        ser().install(Closure::from(From::from).install(dispatch)),
+        transport::Lift(ser()).install(Closure::from(From::from).install(dispatch)),
         finished.state(),
         count,
     );

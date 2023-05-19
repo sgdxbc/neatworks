@@ -15,9 +15,9 @@ use wm_core::{
     actor::{Drive, State, Wire},
     app::{Closure, PureState},
     route::{ClientTable, ReplicaTable},
-    App, Dispatch,
+    transport, App, Dispatch,
 };
-use wm_pbft::{client, replica, Replica, Sign, Signature, ToReplica, Verify};
+use wm_pbft::{client, replica, Replica, Sign, ToReplica, Verify};
 
 struct Null;
 
@@ -62,7 +62,7 @@ async fn run_clients_udp(cli: Cli, route: ClientTable, replica_addr: SocketAddr)
         let egress = wm_udp::Out::bind(client_addr).await;
         let mut ingress = wm_udp::In::new(
             &egress,
-            de().install(
+            transport::Lift(de()).install(
                 Closure::from(|(_, message)| Message::Handle(message)).install(client_wire.state()),
             ),
         );
@@ -74,7 +74,8 @@ async fn run_clients_udp(cli: Cli, route: ClientTable, replica_addr: SocketAddr)
         let mut client = wm_pbft::Client::new(
             client_id,
             cli.faulty_count,
-            Closure::from(move |message| (replica_addr, message)).install(ser().install(egress)),
+            Closure::from(move |message| (replica_addr, message))
+                .install(transport::Lift(ser()).install(egress)),
             workload,
         );
         clients.push(spawn(async move {
@@ -132,7 +133,7 @@ async fn run_replica_udp(
 
     let app = wm_pbft::App::new(cli.replica_id, Null).install_filtered(
         Closure::from(move |(id, message)| (route.lookup_addr(id), message))
-            .install(ser().install(egress.clone())),
+            .install(transport::Lift(ser()).install(egress.clone())),
     );
 
     struct ReplicaEgress<S> {
@@ -142,9 +143,9 @@ async fn run_replica_udp(
     }
     impl<'m, S> State<'m> for ReplicaEgress<S>
     where
-        S: State<'m, Message = (SocketAddr, (ToReplica, Signature))>,
+        S: State<'m, Message = (SocketAddr, Vec<u8>)>,
     {
-        type Message = replica::Egress<(ToReplica, Signature)>;
+        type Message = replica::Egress<Vec<u8>>;
 
         fn update(&mut self, message: Self::Message) {
             match message {
@@ -174,18 +175,19 @@ async fn run_replica_udp(
         replica_route.len(),
         cli.faulty_count,
         app,
-        // TODO lift `ser()` as well
-        replica::EgressLift(Sign::new(&replica_route, cli.replica_id)).install(ReplicaEgress {
-            route: replica_route.clone(),
-            id: cli.replica_id,
-            state: ser().install(egress.clone()),
-        }),
+        replica::EgressLift(Sign::new(&replica_route, cli.replica_id)).install(
+            replica::EgressLift(ser()).install(ReplicaEgress {
+                route: replica_route.clone(),
+                id: cli.replica_id,
+                state: egress.clone(),
+            }),
+        ),
         control.install(Dispatch::default()),
     );
 
     let mut ingress = wm_udp::In::new(
         &egress,
-        de().install(
+        transport::Lift(de()).install(
             Closure::from(|(_, message)| message)
                 .install(Verify::new(&replica_route, replica_wire.state())),
         ),
@@ -201,7 +203,6 @@ async fn run_replica_udp(
 
     ingress.abort();
     waker.abort();
-
     // print some stats if needed
     let _replica = replica;
 }

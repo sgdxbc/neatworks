@@ -5,7 +5,7 @@ use wm_bincode::{de, ser};
 use wm_core::{
     actor::{Drive, State, Wire},
     app::{Closure, PureState},
-    Dispatch,
+    transport, Dispatch,
 };
 
 use tokio::spawn;
@@ -15,14 +15,17 @@ type UserPayload = u16;
 async fn use_barrier_udp(addr: SocketAddr, service: SocketAddr) -> Message<UserPayload> {
     // 1. listen to barrier message
     let message = Wire::<Message<UserPayload>>::default();
-    let state = de().install(Closure::from(|(_, message)| message).install(message.state()));
+    let state = transport::Lift(de())
+        .install(Closure::from(|(_, message)| message).install(message.state()));
     let out = wm_udp::Out::bind(addr).await;
     let local_message = out.0.local_addr().unwrap().port();
     let mut ingress = wm_udp::In::new(&out, state);
     let ingress = spawn(async move { ingress.start().await });
 
     // 2. tx
-    ser().install(out).update((service, local_message));
+    transport::Lift(ser())
+        .install(out)
+        .update((service, local_message));
 
     // 3. wait for rx
     let mut message = Drive::from(message).recv().await.unwrap();
@@ -33,9 +36,9 @@ async fn use_barrier_udp(addr: SocketAddr, service: SocketAddr) -> Message<UserP
 
 async fn provide_barrier_udp(addr: SocketAddr, count: usize) {
     let out = wm_udp::Out::bind(addr).await;
-    let egress = ser().install(out.clone());
+    let egress = transport::Lift(ser()).install(out.clone());
     let finished = Wire::default();
-    let state = de().install(Service::<UserPayload, _, _>::new(
+    let state = transport::Lift(de()).install(Service::<UserPayload, _, _>::new(
         egress,
         finished.state(),
         count,
@@ -78,7 +81,8 @@ async fn use_barrier_tcp(addr: SocketAddr, service: SocketAddr) -> Message<UserP
     let mut connection = wm_tcp::Connection::connect(
         addr,
         service,
-        de().install(Closure::from(|(_, message)| message).install(message.state())),
+        transport::Lift(de())
+            .install(Closure::from(|(_, message)| message).install(message.state())),
         Wire::default().state(),
     )
     .await;
@@ -87,7 +91,7 @@ async fn use_barrier_tcp(addr: SocketAddr, service: SocketAddr) -> Message<UserP
     dispatch.insert_state(connection.remote_addr, connection.out_state());
     let connection = spawn(async move { connection.start().await });
 
-    ser()
+    transport::Lift(ser())
         .install(Closure::from(From::from).install(dispatch))
         .update((service, local_message));
 
@@ -108,7 +112,7 @@ async fn provide_barrier_tcp(addr: SocketAddr, count: usize) {
     for _ in 0..count {
         let mut connection = listener
             .accept(
-                de::<UserPayload>().install(app_wire.state()),
+                transport::Lift(de::<UserPayload>()).install(app_wire.state()),
                 disconnected.state(),
             )
             .await;
@@ -116,7 +120,7 @@ async fn provide_barrier_tcp(addr: SocketAddr, count: usize) {
         connections.push(spawn(async move { connection.start().await }));
     }
     let app = Service::new(
-        ser().install(Closure::from(From::from).install(dispatch)),
+        transport::Lift(ser()).install(Closure::from(From::from).install(dispatch)),
         finished.state(),
         count,
     );

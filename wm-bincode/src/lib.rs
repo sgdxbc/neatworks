@@ -1,4 +1,4 @@
-use std::{marker::PhantomData, net::SocketAddr};
+use std::marker::PhantomData;
 
 use bincode::Options;
 use serde::{de::DeserializeOwned, Serialize};
@@ -23,36 +23,29 @@ impl<'i, M> PureState<'i> for De<M>
 where
     M: DeserializeOwned,
 {
-    type Input = (SocketAddr, &'i [u8]);
-    type Output<'output> = (SocketAddr, M) where Self: 'output;
+    type Input = &'i [u8];
+    type Output<'output> = M where Self: 'output;
 
     fn update(&mut self, input: Self::Input) -> Self::Output<'_> {
-        let (addr, buf) = input;
-        let message = bincode::options()
+        bincode::options()
             //
             .allow_trailing_bytes()
-            .deserialize(buf)
-            .unwrap();
-        (addr, message)
+            .deserialize(input)
+            .unwrap()
     }
 }
 
 pub const fn de<M>(
-) -> impl for<'i, 'o> PureState<'i, Input = (SocketAddr, &'i [u8]), Output<'o> = (SocketAddr, M)>
-       + SharedClone
+) -> impl for<'i, 'o> PureState<'i, Input = &'i [u8], Output<'o> = M> + SharedClone
 where
     M: DeserializeOwned + 'static,
 {
     De(PhantomData)
 }
 
-pub fn ser<M>(
-) -> impl for<'i, 'o> PureState<'i, Input = (SocketAddr, M), Output<'o> = (SocketAddr, Vec<u8>)>
+pub fn ser<M>() -> impl for<'i, 'o> PureState<'i, Input = M, Output<'o> = Vec<u8>>
 where
     M: Serialize + 'static,
 {
-    Closure::new(|(socket, message)| {
-        let message = bincode::options().serialize(&message).unwrap();
-        (socket, message)
-    })
+    Closure::new(|message| bincode::options().serialize(&message).unwrap())
 }
