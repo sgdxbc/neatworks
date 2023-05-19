@@ -1,7 +1,7 @@
 use std::{net::SocketAddr, sync::Arc};
 
 use tokio::{net::UdpSocket, spawn};
-use wm_core::actor;
+use wm_core::{actor, transport};
 
 pub struct In<A> {
     pub socket: Arc<UdpSocket>,
@@ -25,7 +25,7 @@ impl<A> In<A> {
 
     pub async fn start(&mut self)
     where
-        A: for<'a> actor::State<'a, Message = (SocketAddr, &'a [u8])>,
+        A: for<'a> actor::State<'a, Message = transport::Message<'a>>,
     {
         let mut buf = vec![0; 65536];
         loop {
@@ -45,7 +45,7 @@ impl Out {
 }
 
 impl actor::State<'_> for Out {
-    type Message = (SocketAddr, Vec<u8>);
+    type Message = transport::OwnedMessage;
 
     fn update(&mut self, message: Self::Message) {
         let (target, buf) = message;

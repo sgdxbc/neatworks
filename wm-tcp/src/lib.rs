@@ -6,7 +6,7 @@ use tokio::{
     select,
     sync::mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender},
 };
-use wm_core::actor::State;
+use wm_core::{actor::State, transport};
 
 // design choice: select tx/rx in the same loop over split into two loops
 // design choice: unreliable tx over actively retry/back propogation
@@ -66,6 +66,9 @@ impl<S, D> Connection<S, D> {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct Disconnected(SocketAddr);
+
 impl<S, D, T> GeneralConnection<S, D, T> {
     pub fn out_state(&self) -> ConnectionOut {
         ConnectionOut(self.egress.0.clone())
@@ -73,8 +76,8 @@ impl<S, D, T> GeneralConnection<S, D, T> {
 
     pub async fn start(&mut self)
     where
-        S: for<'m> State<'m, Message = (SocketAddr, &'m [u8])>,
-        D: for<'m> State<'m, Message = SocketAddr>,
+        S: for<'m> State<'m, Message = transport::Message<'m>>,
+        D: for<'m> State<'m, Message = Disconnected>,
         // require Unpin or pin it locally?
         T: AsyncRead + AsyncWrite + Unpin,
     {
@@ -104,7 +107,7 @@ impl<S, D, T> GeneralConnection<S, D, T> {
                 }
             }
         }
-        self.disconnected.update(self.remote_addr)
+        self.disconnected.update(Disconnected(self.remote_addr))
     }
 }
 
