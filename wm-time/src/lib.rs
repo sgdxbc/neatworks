@@ -3,14 +3,17 @@ use std::{marker::PhantomData, time::Duration};
 use tokio::{
     select, spawn,
     sync::mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender},
-    task::JoinHandle,
     time::{sleep, Instant},
 };
 use wm_core::{actor::State, app::PureState, dispatch, timeout};
 
+// Unset semantic is only guaranteed when message passing is fully synchronous
+// that is, both `Sleeper` and (`Control`-installed) `Dispatch` must be directly
+// embedded instead of `Drive`ed.
+// in the future maybe a marker trait should be added to encode this requirement
+
 #[derive(Debug)]
 pub struct Sleeper<T> {
-    task: JoinHandle<()>,
     reset: UnboundedSender<()>,
     _timeout: PhantomData<T>,
 }
@@ -21,8 +24,8 @@ impl<T> Sleeper<T> {
         T: Send + 'static,
     {
         let reset = unbounded_channel();
+        spawn(Self::run(duration, reset.1, wake, timeout));
         Self {
-            task: spawn(Self::run(duration, reset.1, wake, timeout)),
             reset: reset.0,
             _timeout: PhantomData,
         }
@@ -55,23 +58,14 @@ impl<T> Sleeper<T> {
     }
 }
 
-pub enum Message {
-    Reset,
-    Unset,
-}
+pub struct Reset;
 
 impl<T> State<'_> for Sleeper<T> {
-    type Message = Message;
+    type Message = Reset;
 
-    fn update(&mut self, message: Self::Message) {
-        // check no previous Unset?
-        match message {
-            Message::Reset => {
-                if self.reset.send(()).is_err() {
-                    //
-                }
-            }
-            Message::Unset => self.task.abort(),
+    fn update(&mut self, Reset: Self::Message) {
+        if self.reset.send(()).is_err() {
+            //
         }
     }
 }
@@ -113,7 +107,7 @@ where
     T: Clone + Send + 'static,
 {
     type Input = timeout::Message<T>;
-    type Output<'output> = dispatch::Message<T, Sleeper<T>, Message> where Self: 'output;
+    type Output<'output> = dispatch::Message<T, Sleeper<T>, Reset> where Self: 'output;
 
     fn update(&mut self, input: Self::Input) -> Self::Output<'_> {
         use {dispatch::Message::*, timeout::Message::*};
@@ -122,7 +116,7 @@ where
                 timeout.clone(),
                 Sleeper::spawn(Default::default(), self.0.clone(), timeout),
             ),
-            Reset(timeout) => Update(timeout, Message::Reset),
+            Reset(timeout) => Update(timeout, crate::Reset),
             Unset(timeout) => Remove(timeout),
         }
     }
