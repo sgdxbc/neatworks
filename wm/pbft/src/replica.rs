@@ -8,7 +8,8 @@ use std::collections::HashMap;
 use bincode::Options;
 use serde::{Deserialize, Serialize};
 use wm_core::{
-    actor, app,
+    actor,
+    app::{self, PureState},
     timeout::{
         self,
         Message::{Set, Unset},
@@ -32,6 +33,16 @@ pub struct App<A> {
     replica_id: u8,
     pub state: A,
     replies: HashMap<u32, Reply>,
+}
+
+impl<A> App<A> {
+    pub fn new(replica_id: u8, state: A) -> Self {
+        Self {
+            replica_id,
+            state,
+            replies: Default::default(),
+        }
+    }
 }
 
 impl<'o, A> app::PureState<'o> for App<A>
@@ -97,13 +108,13 @@ pub struct Commit {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum Egress {
-    To(u8, ToReplica),
-    ToAll(ToReplica), // except self
+pub enum Egress<M> {
+    To(u8, M),
+    ToAll(M), // except self
 }
 
-impl Egress {
-    fn to(replica_id: u8) -> impl Fn(ToReplica) -> Self {
+impl<M> Egress<M> {
+    fn to(replica_id: u8) -> impl Fn(M) -> Self {
         move |m| Self::To(replica_id, m)
     }
 }
@@ -164,7 +175,7 @@ impl<U, E, T> Replica<U, E, T> {
 impl<U, E, T> actor::State<'_> for Replica<U, E, T>
 where
     U: for<'m> actor::State<'m, Message = Upcall<'m>>,
-    E: for<'m> actor::State<'m, Message = Egress>,
+    E: for<'m> actor::State<'m, Message = Egress<ToReplica>>,
     T: for<'m> actor::State<'m, Message = timeout::Message<Timeout>>,
 {
     type Message = ToReplica;
@@ -248,7 +259,7 @@ fn digest(requests: &[Request]) -> [u8; 32] {
 impl<U, E, T> Replica<U, E, T>
 where
     U: for<'m> actor::State<'m, Message = Upcall<'m>>,
-    E: for<'m> actor::State<'m, Message = Egress>,
+    E: for<'m> actor::State<'m, Message = Egress<ToReplica>>,
     T: for<'m> actor::State<'m, Message = timeout::Message<Timeout>>,
 {
     fn handle_request(&mut self, message: Request) {
@@ -382,7 +393,11 @@ where
             .update(Egress::ToAll(ToReplica::PrePrepare(pre_prepare, requests)));
     }
 
-    fn send_prepare(&mut self, op_num: OpNum, to_whom: impl FnOnce(ToReplica) -> Egress) {
+    fn send_prepare(
+        &mut self,
+        op_num: OpNum,
+        to_whom: impl FnOnce(ToReplica) -> Egress<ToReplica>,
+    ) {
         assert_ne!(self.id, self.primary_id());
         let prepare = Prepare {
             view_num: self.view_num,
@@ -393,7 +408,7 @@ where
         self.egress.update(to_whom(ToReplica::Prepare(prepare)));
     }
 
-    fn send_commit(&mut self, op_num: OpNum, to_whom: impl FnOnce(ToReplica) -> Egress) {
+    fn send_commit(&mut self, op_num: OpNum, to_whom: impl FnOnce(ToReplica) -> Egress<ToReplica>) {
         let commit = Commit {
             view_num: self.view_num,
             op_num,
@@ -453,6 +468,23 @@ where
                 self.upcall.update(upcall);
             }
             self.execute_number += 1;
+        }
+    }
+}
+
+pub struct EgressLift<S>(pub S);
+
+impl<'m, S> PureState<'m> for EgressLift<S>
+where
+    S: PureState<'m>,
+{
+    type Input = Egress<S::Input>;
+    type Output<'output> = Egress<S::Output<'output>> where Self: 'output;
+
+    fn update(&mut self, input: Self::Input) -> Self::Output<'_> {
+        match input {
+            Egress::To(id, message) => Egress::To(id, self.0.update(message)),
+            Egress::ToAll(message) => Egress::ToAll(self.0.update(message)),
         }
     }
 }

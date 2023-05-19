@@ -17,10 +17,10 @@ use wm_bincode::{de, ser};
 use wm_core::{
     actor::{Drive, State, Wire},
     app::{Closure, PureState},
-    route::{self, ClientTable},
+    route::ClientTable,
     App, Dispatch,
 };
-use wm_unreplicated::Replica;
+use wm_unreplicated::{client, Client, Replica};
 
 struct Null;
 
@@ -38,9 +38,9 @@ struct Workload<I> {
 
 impl<I> State<'_> for Workload<I>
 where
-    I: for<'m> State<'m, Message = wm_unreplicated::client::Message>,
+    I: for<'m> State<'m, Message = client::Message>,
 {
-    type Message = wm_unreplicated::client::Result;
+    type Message = client::Result;
 
     fn update(&mut self, message: Self::Message) {
         assert_eq!(message, wm_unreplicated::client::Result(Default::default()));
@@ -48,12 +48,12 @@ where
         self.latencies.push(now - self.outstanding_start);
         self.outstanding_start = now;
         self.invoke
-            .update(wm_unreplicated::client::Message::Invoke(Default::default()));
+            .update(client::Message::Invoke(Default::default()));
     }
 }
 
-async fn run_clients_udp(cli: Cli, route: route::ClientTable, replica_addr: SocketAddr) {
-    use wm_unreplicated::client::Message;
+async fn run_clients_udp(cli: Cli, route: ClientTable, replica_addr: SocketAddr) {
+    use client::Message;
 
     let client_index = cli.client_index.unwrap();
     let mut clients = Vec::new();
@@ -74,7 +74,7 @@ async fn run_clients_udp(cli: Cli, route: route::ClientTable, replica_addr: Sock
             outstanding_start: Instant::now(),
             invoke: client_wire.state(),
         };
-        let mut client = wm_unreplicated::Client::new(
+        let mut client = Client::new(
             client_id,
             Closure::from(move |message| (replica_addr, message)).install(ser().install(egress)),
             workload,
@@ -122,7 +122,7 @@ async fn run_clients_udp(cli: Cli, route: route::ClientTable, replica_addr: Sock
     }
 }
 
-async fn run_replica_udp(_cli: Cli, route: route::ClientTable, replica_addr: SocketAddr) {
+async fn run_replica_udp(_cli: Cli, route: ClientTable, replica_addr: SocketAddr) {
     let egress = wm_udp::Out::bind(replica_addr).await;
 
     let app = wm_unreplicated::App::from(Null).install_filtered(
@@ -144,7 +144,7 @@ async fn run_replica_udp(_cli: Cli, route: route::ClientTable, replica_addr: Soc
     let _replica = replica;
 }
 
-async fn run_clients_tcp(cli: Cli, route: route::ClientTable, replica_addr: SocketAddr) {
+async fn run_clients_tcp(cli: Cli, route: ClientTable, replica_addr: SocketAddr) {
     use wm_unreplicated::client::Message;
 
     let client_index = cli.client_index.unwrap();
@@ -173,7 +173,7 @@ async fn run_clients_tcp(cli: Cli, route: route::ClientTable, replica_addr: Sock
             outstanding_start: Instant::now(),
             invoke: client_wire.state(),
         };
-        let mut client = wm_unreplicated::Client::new(
+        let mut client = Client::new(
             client_id,
             Closure::from(move |message| (replica_addr, message))
                 .install(ser().install(Closure::from(From::from).install(dispatch))),
@@ -221,7 +221,7 @@ async fn run_clients_tcp(cli: Cli, route: route::ClientTable, replica_addr: Sock
     }
 }
 
-async fn run_replica_tcp(_cli: Cli, route: route::ClientTable, replica_addr: SocketAddr) {
+async fn run_replica_tcp(_cli: Cli, route: ClientTable, replica_addr: SocketAddr) {
     let replica_wire = Wire::default();
     let disconnected = Wire::default();
 
@@ -253,7 +253,7 @@ async fn run_replica_tcp(_cli: Cli, route: route::ClientTable, replica_addr: Soc
     let _replica = replica;
 }
 
-async fn run_clients_tls(cli: Cli, route: route::ClientTable, replica_addr: SocketAddr) {
+async fn run_clients_tls(cli: Cli, route: ClientTable, replica_addr: SocketAddr) {
     use wm_unreplicated::client::Message;
 
     let client_index = cli.client_index.unwrap();
@@ -285,7 +285,7 @@ async fn run_clients_tls(cli: Cli, route: route::ClientTable, replica_addr: Sock
             outstanding_start: Instant::now(),
             invoke: client_wire.state(),
         };
-        let mut client = wm_unreplicated::Client::new(
+        let mut client = Client::new(
             client_id,
             Closure::from(move |message| (replica_addr, message))
                 .install(ser().install(Closure::from(From::from).install(dispatch))),
@@ -333,7 +333,7 @@ async fn run_clients_tls(cli: Cli, route: route::ClientTable, replica_addr: Sock
     }
 }
 
-async fn run_replica_tls(_cli: Cli, route: route::ClientTable, replica_addr: SocketAddr) {
+async fn run_replica_tls(_cli: Cli, route: ClientTable, replica_addr: SocketAddr) {
     let replica_wire = Wire::default();
     let disconnected = Wire::default();
 

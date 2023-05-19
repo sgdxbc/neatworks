@@ -2,6 +2,10 @@ pub mod client;
 pub mod crypto;
 pub mod replica;
 
+pub use client::Client;
+pub use crypto::{Sign, Verify, Signature};
+pub use replica::{App, Replica, ToReplica};
+
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

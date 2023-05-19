@@ -5,7 +5,7 @@ use std::{
 
 use rand::Rng;
 
-#[derive(Default)]
+#[derive(Default, Clone, PartialEq, Eq)]
 pub struct ClientTable {
     hosts: BTreeMap<usize, IpAddr>,
     identities: Vec<u32>,
@@ -44,6 +44,7 @@ impl ClientTable {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ReplicaTable {
     identities: Vec<[u8; 32]>,
     routes: Vec<SocketAddr>,

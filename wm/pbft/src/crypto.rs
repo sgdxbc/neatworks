@@ -1,8 +1,10 @@
 use bincode::Options;
-use ed25519_dalek::{Keypair, PublicKey, SecretKey, Signature, Signer, Verifier};
+use ed25519_dalek::{Keypair, PublicKey, SecretKey, Signer, Verifier};
 use wm_core::{actor::State, app::PureState, route::ReplicaTable};
 
 use crate::replica::ToReplica;
+
+pub type Signature = ed25519_dalek::Signature;
 
 fn replica_id(message: &ToReplica, n: usize) -> u8 {
     match message {
@@ -19,7 +21,7 @@ pub struct Verify<S> {
 }
 
 impl<S> Verify<S> {
-    pub fn new(route: ReplicaTable, state: S) -> Self {
+    pub fn new(route: &ReplicaTable, state: S) -> Self {
         let keys = (0..route.len())
             .map(|i| (&SecretKey::from_bytes(&route.identity(i as _)).unwrap()).into())
             .collect();
@@ -54,7 +56,7 @@ pub struct Sign {
 }
 
 impl Sign {
-    pub fn new(route: ReplicaTable, id: u8) -> Self {
+    pub fn new(route: &ReplicaTable, id: u8) -> Self {
         let secret = SecretKey::from_bytes(&route.identity(id)).unwrap();
         Self {
             key: Keypair {
