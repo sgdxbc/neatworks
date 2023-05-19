@@ -44,7 +44,7 @@ impl ClientTable {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct ReplicaTable {
     identities: Vec<[u8; 32]>,
     routes: Vec<SocketAddr>,

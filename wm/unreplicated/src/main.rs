@@ -423,9 +423,9 @@ async fn main() {
     let mut rng = StdRng::seed_from_u64(0);
     for user in users {
         match user {
-            (BarrierUser::Replica, addr) => {
+            (BarrierUser::Replica, host) => {
                 assert!(replica.is_none());
-                replica = Some(SocketAddr::from((addr, 60002)));
+                replica = Some(SocketAddr::from((host, 60002)));
             }
             (BarrierUser::Client(index, count), host) => {
                 assert_eq!(index, route.len());

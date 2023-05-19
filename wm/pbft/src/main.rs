@@ -4,12 +4,15 @@ use std::{
 };
 
 use clap::Parser;
+use rand::{rngs::StdRng, SeedableRng};
+use serde::{Deserialize, Serialize};
 use tokio::{
     select,
     signal::ctrl_c,
     spawn,
     time::{sleep, timeout},
 };
+use wm_barrier::{provide_barrier, use_barrier};
 use wm_bincode::{de, ser};
 use wm_core::{
     actor::{Drive, State, Wire},
@@ -49,7 +52,39 @@ where
     }
 }
 
-async fn run_clients_udp(cli: Cli, route: ClientTable, replica_addr: SocketAddr) {
+struct EgressRoute<S> {
+    route: ReplicaTable,
+    addr: SocketAddr,
+    state: S,
+}
+
+impl<'m, S> State<'m> for EgressRoute<S>
+where
+    S: State<'m, Message = (SocketAddr, Vec<u8>)>,
+{
+    type Message = replica::Egress<Vec<u8>>;
+
+    fn update(&mut self, message: Self::Message) {
+        match message {
+            replica::Egress::To(replica_id, message) => {
+                let addr = self.route.lookup_addr(replica_id);
+                assert_ne!(addr, self.addr);
+                self.state.update((addr, message))
+            }
+            replica::Egress::ToAll(message) => {
+                for id in 0..self.route.len() as u8 {
+                    let addr = self.route.lookup_addr(id);
+                    if addr == self.addr {
+                        continue;
+                    }
+                    self.state.update((addr, message.clone()))
+                }
+            }
+        }
+    }
+}
+
+async fn run_clients(cli: Cli, route: ClientTable, replica_route: ReplicaTable) {
     use client::Message;
 
     let client_index = cli.client_index.unwrap();
@@ -74,8 +109,13 @@ async fn run_clients_udp(cli: Cli, route: ClientTable, replica_addr: SocketAddr)
         let mut client = wm_pbft::Client::new(
             client_id,
             cli.faulty_count,
-            Closure::from(move |message| (replica_addr, message))
-                .install(transport::Lift(ser()).install(egress)),
+            Closure::from(replica::Egress::ToAll).install(replica::EgressLift(ser()).install(
+                EgressRoute {
+                    route: replica_route.clone(),
+                    addr: client_addr,
+                    state: egress,
+                },
+            )),
             workload,
         );
         clients.push(spawn(async move {
@@ -121,64 +161,30 @@ async fn run_clients_udp(cli: Cli, route: ClientTable, replica_addr: SocketAddr)
     }
 }
 
-async fn run_replica_udp(
-    cli: Cli,
-    route: ClientTable,
-    replica_addr: SocketAddr,
-    replica_route: ReplicaTable,
-) {
+async fn run_replica(cli: Cli, route: ClientTable, replica_route: ReplicaTable) {
+    let replica_id = cli.replica_id.unwrap();
+    let replica_addr = replica_route.lookup_addr(replica_id);
     let replica_wire = Wire::default();
 
     let egress = wm_udp::Out::bind(replica_addr).await;
 
-    let app = wm_pbft::App::new(cli.replica_id, Null).install_filtered(
+    let app = wm_pbft::App::new(replica_id, Null).install_filtered(
         Closure::from(move |(id, message)| (route.lookup_addr(id), message))
             .install(transport::Lift(ser()).install(egress.clone())),
     );
-
-    struct ReplicaEgress<S> {
-        route: ReplicaTable,
-        id: u8,
-        state: S,
-    }
-    impl<'m, S> State<'m> for ReplicaEgress<S>
-    where
-        S: State<'m, Message = (SocketAddr, Vec<u8>)>,
-    {
-        type Message = replica::Egress<Vec<u8>>;
-
-        fn update(&mut self, message: Self::Message) {
-            match message {
-                replica::Egress::To(replica_id, message) => {
-                    assert_ne!(replica_id, self.id);
-                    self.state
-                        .update((self.route.lookup_addr(replica_id), message))
-                }
-                replica::Egress::ToAll(message) => {
-                    for id in 0..self.route.len() as u8 {
-                        if id == self.id {
-                            continue;
-                        }
-                        self.state
-                            .update((self.route.lookup_addr(id), message.clone()))
-                    }
-                }
-            }
-        }
-    }
 
     let (mut waker, control) =
         wm_time::new(Closure::from(ToReplica::Timeout).install(replica_wire.state()));
 
     let mut replica = Replica::new(
-        cli.replica_id,
+        replica_id,
         replica_route.len(),
         cli.faulty_count,
         app,
-        replica::EgressLift(Sign::new(&replica_route, cli.replica_id)).install(
-            replica::EgressLift(ser()).install(ReplicaEgress {
+        replica::EgressLift(Sign::new(&replica_route, replica_id)).install(
+            replica::EgressLift(ser()).install(EgressRoute {
                 route: replica_route.clone(),
-                id: cli.replica_id,
+                addr: replica_addr,
                 state: egress.clone(),
             }),
         ),
@@ -207,6 +213,12 @@ async fn run_replica_udp(
     let _replica = replica;
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+enum BarrierUser {
+    Replica(u8),
+    Client(usize, usize),
+}
+
 #[derive(Parser)]
 struct Cli {
     #[clap(long, default_value_t = 0)]
@@ -222,11 +234,54 @@ struct Cli {
     client_sec: u64,
 
     #[clap(long)]
-    replica_id: u8,
+    replica_id: Option<u8>,
     #[clap(long, default_value_t = 1)]
     faulty_count: usize,
 }
 
-fn main() {
-    println!("Hello, world!");
+#[tokio::main]
+async fn main() {
+    let cli = Cli::parse();
+
+    if cli.barrier_count != 0 {
+        provide_barrier::<BarrierUser>(SocketAddr::from(([0, 0, 0, 0], 60000)), cli.barrier_count)
+            .await;
+        return;
+    }
+
+    let user = match (cli.client_index, cli.replica_id) {
+        (Some(index), None) => BarrierUser::Client(index, cli.client_count),
+        (None, Some(id)) => BarrierUser::Replica(id),
+        _ => unimplemented!(),
+    };
+    let mut users = use_barrier(
+        SocketAddr::from(([0, 0, 0, 0], 0)),
+        SocketAddr::from((cli.barrier_host.unwrap(), 60000)),
+        user,
+    )
+    .await;
+    users.sort();
+
+    let mut route = ClientTable::default();
+    let mut replica_route = ReplicaTable::default();
+    let mut rng = StdRng::seed_from_u64(0);
+    for user in users {
+        match user {
+            (BarrierUser::Replica(id), host) => {
+                assert_eq!(id as usize, replica_route.len());
+                replica_route.add(SocketAddr::new(host, 0), &mut rng);
+            }
+            (BarrierUser::Client(index, count), host) => {
+                assert_eq!(index, route.len());
+                route.add_host(host, count, &mut rng);
+            }
+        }
+    }
+
+    if cli.client_index.is_some() {
+        sleep(Duration::from_millis(100)).await;
+        run_clients(cli, route, replica_route).await;
+    } else {
+        run_replica(cli, route, replica_route).await;
+    }
 }
