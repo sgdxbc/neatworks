@@ -1,0 +1,16 @@
+[package]
+name = "murmesh-unreplicated"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+clap = { version = "4.2.7", features = ["derive"] }
+murmesh-barrier = { version = "0.1.0", path = "../../murmesh-barrier" }
+murmesh-bincode = { version = "0.1.0", path = "../../murmesh-bincode" }
+murmesh-core = { version = "0.1.0", path = "../../murmesh-core" }
+murmesh-tcp = { version = "0.1.0", path = "../../murmesh-tcp" }
+murmesh-tls = { version = "0.1.0", path = "../../murmesh-tls" }
+murmesh-udp = { version = "0.1.0", path = "../../murmesh-udp" }
+rand = "0.8.5"
+serde = { version = "1.0.160", features = ["derive"] }
+tokio = { version = "1.27.0", features = ["macros", "rt-multi-thread", "signal", "time"] }

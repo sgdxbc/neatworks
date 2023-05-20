@@ -1,0 +1,11 @@
+[package]
+name = "murmesh-time"
+version = "0.1.0"
+edition = "2021"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+flume = "0.10.14"
+tokio = { version = "1.28.1", features = ["rt", "time", "macros"] }
+murmesh-core = { version = "0.1.0", path = "../murmesh-core" }

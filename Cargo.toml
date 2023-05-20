@@ -1,5 +1,5 @@
 [workspace]
-members = ["wm-*", "wm/*"]
+members = ["murmesh-*", "murmesh/*"]
 
 [profile.dev]
 panic = "abort"

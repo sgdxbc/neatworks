@@ -1,0 +1,13 @@
+[package]
+name = "murmesh-tls"
+version = "0.1.0"
+edition = "2021"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+murmesh-tcp = { version = "0.1.0", path = "../murmesh-tcp" }
+rcgen = { version = "0.10.0", features = ["x509-parser"] }
+rustls-pemfile = "1.0.2"
+tokio = { version = "1.28.1", features = ["net"] }
+tokio-rustls = "0.24.0"

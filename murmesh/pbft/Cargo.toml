@@ -1,0 +1,20 @@
+[package]
+name = "murmesh-pbft"
+version = "0.1.0"
+edition = "2021"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+bincode = "1.3.3"
+ed25519-dalek = { version = "1.0.1", features = ["serde"] }
+murmesh-core = { version = "0.1.0", path = "../../murmesh-core" }
+serde = { version = "1.0.163", features = ["derive"] }
+sha2 = "0.10.6"
+murmesh-udp = { version = "0.1.0", path = "../../murmesh-udp" }
+murmesh-bincode = { version = "0.1.0", path = "../../murmesh-bincode" }
+tokio = { version = "1.28.1", features = ["macros", "rt-multi-thread", "time", "signal"] }
+clap = { version = "4.2.7", features = ["derive"] }
+murmesh-time = { version = "0.1.0", path = "../../murmesh-time" }
+murmesh-barrier = { version = "0.1.0", path = "../../murmesh-barrier" }
+rand = "0.8.5"
