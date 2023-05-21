@@ -4,6 +4,15 @@ use std::{
 };
 
 use clap::Parser;
+use murmesh_barrier::{provide_barrier, use_barrier};
+use murmesh_bincode::{de, ser};
+use murmesh_core::{
+    actor::{Drive, State, Wire},
+    app::{Closure, FunctionalState},
+    route::{ClientTable, ReplicaTable},
+    transport, App, Dispatch,
+};
+use murmesh_pbft::{client, replica, Replica, Sign, ToReplica, Verify};
 use rand::{rngs::StdRng, SeedableRng};
 use serde::{Deserialize, Serialize};
 use tokio::{
@@ -12,15 +21,6 @@ use tokio::{
     spawn,
     time::{sleep, timeout},
 };
-use murmesh_barrier::{provide_barrier, use_barrier};
-use murmesh_bincode::{de, ser};
-use murmesh_core::{
-    actor::{Drive, State, Wire},
-    app::{Closure, PureState},
-    route::{ClientTable, ReplicaTable},
-    transport, App, Dispatch,
-};
-use murmesh_pbft::{client, replica, Replica, Sign, ToReplica, Verify};
 
 struct Null;
 

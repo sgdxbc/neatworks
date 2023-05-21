@@ -4,7 +4,7 @@ use murmesh_barrier::{Message, Service};
 use murmesh_bincode::{de, ser};
 use murmesh_core::{
     actor::{Drive, State, Wire},
-    app::{Closure, PureState},
+    app::{Closure, FunctionalState},
     transport, Dispatch,
 };
 

@@ -4,6 +4,15 @@ use std::{
 };
 
 use clap::Parser;
+use murmesh_barrier::{provide_barrier, use_barrier};
+use murmesh_bincode::{de, ser};
+use murmesh_core::{
+    actor::{Drive, State, Wire},
+    app::{Closure, FunctionalState},
+    route::ClientTable,
+    transport, App, Dispatch,
+};
+use murmesh_unreplicated::{client, Client, Replica};
 use rand::{rngs::StdRng, SeedableRng};
 use serde::{Deserialize, Serialize};
 use tokio::{
@@ -12,15 +21,6 @@ use tokio::{
     spawn,
     time::{sleep, timeout},
 };
-use murmesh_barrier::{provide_barrier, use_barrier};
-use murmesh_bincode::{de, ser};
-use murmesh_core::{
-    actor::{Drive, State, Wire},
-    app::{Closure, PureState},
-    route::ClientTable,
-    transport, App, Dispatch,
-};
-use murmesh_unreplicated::{client, Client, Replica};
 
 struct Null;
 
@@ -43,7 +43,10 @@ where
     type Message = client::Result;
 
     fn update(&mut self, message: Self::Message) {
-        assert_eq!(message, murmesh_unreplicated::client::Result(Default::default()));
+        assert_eq!(
+            message,
+            murmesh_unreplicated::client::Result(Default::default())
+        );
         let now = Instant::now();
         self.latencies.push(now - self.outstanding_start);
         self.outstanding_start = now;

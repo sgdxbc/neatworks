@@ -6,15 +6,15 @@
 use std::collections::HashMap;
 
 use bincode::Options;
-use serde::{Deserialize, Serialize};
 use murmesh_core::{
     actor,
-    app::{self, PureState},
+    app::{self, FunctionalState},
     timeout::{
         self,
         Message::{Set, Unset},
     },
 };
+use serde::{Deserialize, Serialize};
 
 use crate::{Reply, Request};
 
@@ -45,7 +45,7 @@ impl<A> App<A> {
     }
 }
 
-impl<'o, A> app::PureState<'o> for App<A>
+impl<'o, A> app::FunctionalState<'o> for App<A>
 where
     A: murmesh_core::App + 'static,
 {
@@ -474,9 +474,9 @@ where
 
 pub struct EgressLift<S>(pub S);
 
-impl<'m, S> PureState<'m> for EgressLift<S>
+impl<'m, S> FunctionalState<'m> for EgressLift<S>
 where
-    S: PureState<'m>,
+    S: FunctionalState<'m>,
 {
     type Input = Egress<S::Input>;
     type Output<'output> = Egress<S::Output<'output>> where Self: 'output;

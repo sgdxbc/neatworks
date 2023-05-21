@@ -1,14 +1,14 @@
 use std::net::SocketAddr;
 
-use crate::app::PureState;
+use crate::app::FunctionalState;
 
 pub type Message<M> = (SocketAddr, M);
 
 pub struct Lift<S>(pub S);
 
-impl<'m, S> PureState<'m> for Lift<S>
+impl<'m, S> FunctionalState<'m> for Lift<S>
 where
-    S: PureState<'m>,
+    S: FunctionalState<'m>,
 {
     type Input = Message<S::Input>;
     type Output<'output> = Message<S::Output<'output>> where Self: 'output;

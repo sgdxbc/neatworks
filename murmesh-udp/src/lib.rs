@@ -1,7 +1,7 @@
 use std::{net::SocketAddr, sync::Arc};
 
-use tokio::{net::UdpSocket, spawn};
 use murmesh_core::{actor, transport};
+use tokio::{net::UdpSocket, spawn};
 
 pub struct In<A> {
     pub socket: Arc<UdpSocket>,

@@ -1,11 +1,11 @@
 use std::marker::PhantomData;
 
 use bincode::Options;
-use serde::{de::DeserializeOwned, Serialize};
 use murmesh_core::{
     actor::SharedClone,
-    app::{Closure, PureState},
+    app::{Closure, FunctionalState},
 };
+use serde::{de::DeserializeOwned, Serialize};
 
 struct De<M>(PhantomData<M>);
 
@@ -19,7 +19,7 @@ impl<M> Copy for De<M> {}
 
 impl<M> SharedClone for De<M> {}
 
-impl<'i, M> PureState<'i> for De<M>
+impl<'i, M> FunctionalState<'i> for De<M>
 where
     M: DeserializeOwned,
 {
@@ -36,14 +36,14 @@ where
 }
 
 pub const fn de<M>(
-) -> impl for<'i, 'o> PureState<'i, Input = &'i [u8], Output<'o> = M> + SharedClone
+) -> impl for<'i, 'o> FunctionalState<'i, Input = &'i [u8], Output<'o> = M> + SharedClone
 where
     M: DeserializeOwned + 'static,
 {
     De(PhantomData)
 }
 
-pub fn ser<M>() -> impl for<'i, 'o> PureState<'i, Input = M, Output<'o> = Vec<u8>>
+pub fn ser<M>() -> impl for<'i, 'o> FunctionalState<'i, Input = M, Output<'o> = Vec<u8>>
 where
     M: Serialize + 'static,
 {

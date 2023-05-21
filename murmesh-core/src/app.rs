@@ -2,7 +2,7 @@ use std::marker::PhantomData;
 
 use crate::actor::{Filtered, SharedClone, State};
 
-pub trait PureState<'input> {
+pub trait FunctionalState<'input> {
     type Input;
     type Output<'output>
     where
@@ -23,6 +23,13 @@ pub trait PureState<'input> {
     {
         Install(self, Filtered(state))
     }
+
+    fn lift<M>(self) -> Lift<Self, M>
+    where
+        Self: Sized,
+    {
+        Lift(self, PhantomData)
+    }
 }
 
 pub struct Closure<F, I, O>(F, PhantomData<(I, O)>);
@@ -39,7 +46,7 @@ impl<F, I, O> From<F> for Closure<F, I, O> {
     }
 }
 
-impl<F, I, O> PureState<'_> for Closure<F, I, O>
+impl<F, I, O> FunctionalState<'_> for Closure<F, I, O>
 where
     F: FnMut(I) -> O,
 {
@@ -66,8 +73,10 @@ pub trait App {
     fn update(&mut self, op_num: u32, op: &[u8]) -> Vec<u8>;
 }
 
-impl<'i, A: App> PureState<'i> for A {
-    type Input = (u32, &'i [u8]);
+pub type Message<'m> = (u32, &'m [u8]);
+
+impl<'i, A: App> FunctionalState<'i> for A {
+    type Input = Message<'i>;
     type Output<'o> = Vec<u8> where A: 'o;
 
     fn update(&mut self, input: Self::Input) -> Self::Output<'_> {
@@ -82,7 +91,7 @@ pub struct Install<A, S>(pub A, pub S);
 
 impl<'i, A, S> State<'i> for Install<A, S>
 where
-    A: PureState<'i>,
+    A: FunctionalState<'i>,
     S: for<'o> State<'o, Message = A::Output<'o>>,
 {
     type Message = A::Input;
@@ -101,7 +110,7 @@ where
 
 pub struct Inspect<S>(pub S);
 
-impl<'m, S> PureState<'m> for Inspect<S>
+impl<'m, S> FunctionalState<'m> for Inspect<S>
 where
     S: State<'m>,
     S::Message: Clone,
@@ -113,5 +122,20 @@ where
     fn update(&mut self, input: Self::Input) -> Self::Output<'_> {
         self.0.update(input.clone());
         input
+    }
+}
+
+pub struct Lift<S, M>(pub S, PhantomData<M>);
+
+impl<'m, S, M> FunctionalState<'m> for Lift<S, M>
+where
+    S: FunctionalState<'m>,
+    M: crate::message::Lift<'m, S::Input, S>,
+{
+    type Input = M;
+    type Output<'o> = M::Out<'o> where Self: 'o;
+
+    fn update(&mut self, input: Self::Input) -> Self::Output<'_> {
+        input.update(&mut self.0)
     }
 }

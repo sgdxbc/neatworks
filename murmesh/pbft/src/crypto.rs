@@ -1,6 +1,6 @@
 use bincode::Options;
 use ed25519_dalek::{Keypair, PublicKey, SecretKey, Signer, Verifier};
-use murmesh_core::{actor::State, app::PureState, route::ReplicaTable};
+use murmesh_core::{actor::State, app::FunctionalState, route::ReplicaTable};
 
 use crate::replica::ToReplica;
 
@@ -67,7 +67,7 @@ impl Sign {
     }
 }
 
-impl PureState<'_> for Sign {
+impl FunctionalState<'_> for Sign {
     type Input = ToReplica;
     type Output<'output> = (ToReplica, Signature) where Self: 'output;
 

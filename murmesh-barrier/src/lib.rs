@@ -3,14 +3,14 @@ use std::{
     net::{IpAddr, SocketAddr},
 };
 
-use serde::{de::DeserializeOwned, Serialize};
-use tokio::spawn;
 use murmesh_bincode::{de, ser};
 use murmesh_core::{
     actor::{Drive, State, Wire},
-    app::{Closure, PureState},
+    app::{Closure, FunctionalState},
     transport, Dispatch,
 };
+use serde::{de::DeserializeOwned, Serialize};
+use tokio::spawn;
 
 /// if `M` is `Ord`, then a sorted `Message<M>` will have deterministic content.
 pub type Message<M> = Vec<(M, IpAddr)>;

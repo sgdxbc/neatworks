@@ -54,7 +54,7 @@ impl<A> From<A> for App<A> {
     }
 }
 
-impl<A> app::PureState<'_> for App<A>
+impl<A> app::FunctionalState<'_> for App<A>
 where
     A: murmesh_core::App + 'static,
 {

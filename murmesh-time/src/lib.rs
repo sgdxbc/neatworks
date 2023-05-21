@@ -1,11 +1,11 @@
 use std::{marker::PhantomData, time::Duration};
 
+use murmesh_core::{actor::State, app::FunctionalState, dispatch, timeout};
 use tokio::{
     select, spawn,
     sync::mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender},
     time::{sleep, Instant},
 };
-use murmesh_core::{actor::State, app::PureState, dispatch, timeout};
 
 // Unset semantic is only guaranteed when message passing is fully synchronous
 // that is, both `Sleeper` and (`Control`-installed) `Dispatch` must be directly
@@ -102,7 +102,7 @@ pub fn new<S, T>(state: S) -> (Waker<T, S>, Control<T>) {
     )
 }
 
-impl<T> PureState<'_> for Control<T>
+impl<T> FunctionalState<'_> for Control<T>
 where
     T: Clone + Send + 'static,
 {
