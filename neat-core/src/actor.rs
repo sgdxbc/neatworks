@@ -1,4 +1,4 @@
-use tokio::sync::mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender};
+use flume::{Receiver, Sender};
 
 pub trait State<Message> {
     fn update(&mut self, message: Message);
@@ -42,11 +42,11 @@ impl<T> SharedClone for std::sync::Arc<T> {}
 
 #[derive(Debug)]
 pub struct Wire<M> {
-    sender: UnboundedSender<M>,
-    receiver: UnboundedReceiver<M>,
+    sender: Sender<M>,
+    receiver: Receiver<M>,
 }
 
-pub struct WireState<M>(UnboundedSender<M>);
+pub struct WireState<M>(Sender<M>);
 
 impl<M> Clone for WireState<M> {
     fn clone(&self) -> Self {
@@ -66,13 +66,13 @@ impl<M> State<M> for WireState<M> {
 
 impl<M> Default for Wire<M> {
     fn default() -> Self {
-        let (sender, receiver) = unbounded_channel();
+        let (sender, receiver) = flume::unbounded();
         Self { sender, receiver }
     }
 }
 
 #[derive(Debug)]
-pub struct Drive<M>(UnboundedReceiver<M>);
+pub struct Drive<M>(Receiver<M>);
 
 impl<M> From<Wire<M>> for Drive<M> {
     fn from(value: Wire<M>) -> Self {
@@ -88,11 +88,11 @@ impl<M> Wire<M> {
 
 impl<M> Drive<M> {
     pub async fn recv(&mut self) -> Option<M> {
-        self.0.recv().await
+        self.0.recv_async().await.ok()
     }
 
     pub async fn run(&mut self, mut state: impl State<M>) {
-        while let Some(message) = self.0.recv().await {
+        while let Ok(message) = self.0.recv_async().await {
             state.update(message)
         }
     }

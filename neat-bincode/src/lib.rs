@@ -34,7 +34,7 @@ where
     }
 }
 
-pub const fn de<M>() -> impl for<'i, 'o> FunctionalState<&'i [u8], Output<'o> = M> + SharedClone
+pub fn de<M>() -> impl for<'i, 'o> FunctionalState<&'i [u8], Output<'o> = M> + SharedClone
 where
     M: DeserializeOwned + 'static,
 {
