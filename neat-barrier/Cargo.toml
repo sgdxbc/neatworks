@@ -1,0 +1,17 @@
+[package]
+name = "neat-barrier"
+version = "0.1.0"
+edition = "2021"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+neat-bincode = { version = "0.1.0", path = "../neat-bincode" }
+neat-core = { version = "0.1.0", path = "../neat-core" }
+neat-tcp = { version = "0.1.0", path = "../neat-tcp" }
+serde = "1.0.162"
+tokio = { version = "1.28.0", features = ["rt"] }
+
+[dev-dependencies]
+neat-udp = { path = "../neat-udp" }
+tokio = { version = "1.28.0", features = ["macros"] }

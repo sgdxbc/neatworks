@@ -1,0 +1,20 @@
+[package]
+name = "neat-pbft"
+version = "0.1.0"
+edition = "2021"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+bincode = "1.3.3"
+ed25519-dalek = { version = "1.0.1", features = ["serde"] }
+neat-core = { version = "0.1.0", path = "../../neat-core" }
+serde = { version = "1.0.163", features = ["derive"] }
+sha2 = "0.10.6"
+neat-udp = { version = "0.1.0", path = "../../neat-udp" }
+neat-bincode = { version = "0.1.0", path = "../../neat-bincode" }
+tokio = { version = "1.28.1", features = ["macros", "rt-multi-thread", "time", "signal"] }
+clap = { version = "4.2.7", features = ["derive"] }
+neat-time = { version = "0.1.0", path = "../../neat-time" }
+neat-barrier = { version = "0.1.0", path = "../../neat-barrier" }
+rand = "0.8.5"
