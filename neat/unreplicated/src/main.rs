@@ -13,7 +13,7 @@ use neat_core::{
     route::ClientTable,
     App, Dispatch, Lift,
 };
-use neat_unreplicated::{client, Client, Replica};
+use neat_unreplicated::{client, AppLift, Client, Replica};
 use rand::{rngs::StdRng, SeedableRng};
 use serde::{Deserialize, Serialize};
 use tokio::{
@@ -128,7 +128,7 @@ async fn run_clients_udp(cli: Cli, route: ClientTable, replica_addr: SocketAddr)
 async fn run_replica_udp(_cli: Cli, route: ClientTable, replica_addr: SocketAddr) {
     let egress = neat_udp::Out::bind(replica_addr).await;
 
-    let app = neat_unreplicated::App::from(Null).install_filtered(
+    let app = Null.lift(AppLift::default()).install_filtered(
         Closure::from(move |(id, message)| (route.lookup_addr(id), message))
             .install(Lift(ser(), TransportLift).install(egress.clone())),
     );
@@ -244,7 +244,7 @@ async fn run_replica_tcp(_cli: Cli, route: ClientTable, replica_addr: SocketAddr
         spawn(async move { connection.start().await });
     }
 
-    let app = neat_unreplicated::App::from(Null).install_filtered(
+    let app = Null.lift(AppLift::default()).install_filtered(
         Closure::from(move |(id, message)| (route.lookup_addr(id), message)).install(
             Lift(ser(), TransportLift).install(Closure::from(From::from).install(dispatch)),
         ),
@@ -361,7 +361,7 @@ async fn run_replica_tls(_cli: Cli, route: ClientTable, replica_addr: SocketAddr
         spawn(async move { connection.start().await });
     }
 
-    let app = neat_unreplicated::App::from(Null).install_filtered(
+    let app = Null.lift(AppLift::default()).install_filtered(
         Closure::from(move |(id, message)| (route.lookup_addr(id), message)).install(
             Lift(ser(), TransportLift).install(Closure::from(From::from).install(dispatch)),
         ),

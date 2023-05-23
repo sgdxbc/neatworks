@@ -8,8 +8,10 @@ use std::collections::HashMap;
 use bincode::Options;
 use neat_core::{
     actor::State,
-    app,
-    message::Timeout::{Set, Unset},
+    message::{
+        Lift,
+        Timeout::{Set, Unset},
+    },
 };
 use serde::{Deserialize, Serialize};
 
@@ -26,47 +28,45 @@ pub struct Upcall<'o> {
     op: &'o [u8],
 }
 
-pub struct App<A> {
+pub struct AppLift {
     replica_id: u8,
-    pub state: A,
     replies: HashMap<u32, Reply>,
 }
 
-impl<A> App<A> {
-    pub fn new(replica_id: u8, state: A) -> Self {
+impl AppLift {
+    pub fn new(replica_id: u8) -> Self {
         Self {
             replica_id,
-            state,
             replies: Default::default(),
         }
     }
 }
 
-impl<A> app::FunctionalState<Upcall<'_>> for App<A>
+impl<A> Lift<A, Upcall<'_>> for AppLift
 where
     A: neat_core::App + 'static,
 {
-    type Output<'a> = Option<(u32, Reply)>;
+    type Out<'a> = Option<(u32, Reply)>;
 
-    fn update(&mut self, input: Upcall<'_>) -> Self::Output<'_> {
-        match self.replies.get(&input.client_id) {
-            Some(reply) if reply.request_num > input.request_num => return None,
-            Some(reply) if reply.request_num == input.request_num => {
-                return Some((input.client_id, reply.clone()))
+    fn update<'a>(&'a mut self, state: &'a mut A, message: Upcall<'_>) -> Self::Out<'a> {
+        match self.replies.get(&message.client_id) {
+            Some(reply) if reply.request_num > message.request_num => return None,
+            Some(reply) if reply.request_num == message.request_num => {
+                return Some((message.client_id, reply.clone()))
             }
             _ => {}
         }
-        assert_ne!(input.view_num, ViewNum::MAX);
-        assert_ne!(input.op_num, 0);
-        let result = self.state.update(input.op_num, input.op);
-        let message = Reply {
+        assert_ne!(message.view_num, ViewNum::MAX);
+        assert_ne!(message.op_num, 0);
+        let result = state.update(message.op_num, message.op);
+        let reply = Reply {
             replica_id: self.replica_id,
-            view_num: input.view_num,
-            request_num: input.request_num,
+            view_num: message.view_num,
+            request_num: message.request_num,
             result,
         };
-        self.replies.insert(input.client_id, message.clone());
-        Some((input.client_id, message))
+        self.replies.insert(message.client_id, reply.clone());
+        Some((message.client_id, reply))
     }
 }
 

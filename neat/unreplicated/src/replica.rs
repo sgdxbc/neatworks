@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use neat_core::{actor, app};
+use neat_core::{actor, message::Lift};
 
 use crate::{Reply, Request};
 
@@ -38,40 +38,31 @@ where
     }
 }
 
-pub struct App<A> {
-    pub state: A,
+#[derive(Debug, Default)]
+pub struct AppLift {
     replies: HashMap<u32, Reply>,
 }
 
-impl<A> From<A> for App<A> {
-    fn from(value: A) -> Self {
-        Self {
-            state: value,
-            replies: Default::default(),
-        }
-    }
-}
-
-impl<A> app::FunctionalState<Upcall> for App<A>
+impl<A> Lift<A, Upcall> for AppLift
 where
     A: neat_core::App + 'static,
 {
-    type Output<'a> = Option<(u32, Reply)>;
+    type Out<'a> = Option<(u32, Reply)>;
 
-    fn update(&mut self, input: Upcall) -> Self::Output<'_> {
-        match self.replies.get(&input.client_id) {
-            Some(reply) if reply.request_num > input.request_num => return None,
-            Some(reply) if reply.request_num == input.request_num => {
-                return Some((input.client_id, reply.clone()))
+    fn update<'a>(&'a mut self, state: &'a mut A, message: Upcall) -> Self::Out<'a> {
+        match self.replies.get(&message.client_id) {
+            Some(reply) if reply.request_num > message.request_num => return None,
+            Some(reply) if reply.request_num == message.request_num => {
+                return Some((message.client_id, reply.clone()))
             }
             _ => {}
         }
-        let result = self.state.update(input.op_num, &input.op);
-        let message = Reply {
-            request_num: input.request_num,
+        let result = state.update(message.op_num, &message.op);
+        let reply = Reply {
+            request_num: message.request_num,
             result,
         };
-        self.replies.insert(input.client_id, message.clone());
-        Some((input.client_id, message))
+        self.replies.insert(message.client_id, reply.clone());
+        Some((message.client_id, reply))
     }
 }

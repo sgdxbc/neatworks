@@ -2,7 +2,7 @@ pub mod client;
 pub mod replica;
 
 pub use client::Client;
-pub use replica::{App, Replica};
+pub use replica::{AppLift, Replica};
 
 use serde::{Deserialize, Serialize};
 

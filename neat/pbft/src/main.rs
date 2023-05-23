@@ -166,10 +166,12 @@ async fn run_replica(cli: Cli, route: ClientTable, replica_route: ReplicaTable) 
 
     let egress = neat_udp::Out::bind(replica_addr).await;
 
-    let app = neat_pbft::App::new(replica_id, Null).install_filtered(
-        Closure::from(move |(id, message)| (route.lookup_addr(id), message))
-            .install(Lift(ser(), TransportLift).install(egress.clone())),
-    );
+    let app = Null
+        .lift(neat_pbft::AppLift::new(replica_id))
+        .install_filtered(
+            Closure::from(move |(id, message)| (route.lookup_addr(id), message))
+                .install(Lift(ser(), TransportLift).install(egress.clone())),
+        );
 
     // TODO
     let replica_wire2 = Wire::default();
