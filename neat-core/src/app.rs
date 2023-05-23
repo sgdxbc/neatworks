@@ -1,5 +1,3 @@
-use std::marker::PhantomData;
-
 use crate::actor::{Filtered, SharedClone, State};
 
 pub trait FunctionalState<Input> {
@@ -39,21 +37,16 @@ pub trait FunctionalState<Input> {
     }
 }
 
-pub struct Closure<F, I, O>(F, PhantomData<(I, O)>);
+#[derive(Debug, Clone)]
+pub struct Closure<F>(pub F);
 
-impl<F, I, O> Closure<F, I, O> {
-    pub const fn new(f: F) -> Self {
-        Self(f, PhantomData)
-    }
-}
-
-impl<F, I, O> From<F> for Closure<F, I, O> {
+impl<F> From<F> for Closure<F> {
     fn from(value: F) -> Self {
-        Self::new(value)
+        Self(value)
     }
 }
 
-impl<F, I, O> FunctionalState<I> for Closure<F, I, O>
+impl<F, I, O> FunctionalState<I> for Closure<F>
 where
     F: FnMut(I) -> O,
 {
@@ -65,16 +58,9 @@ where
     }
 }
 
-impl<F, I, O> Clone for Closure<F, I, O>
-where
-    F: Clone,
-{
-    fn clone(&self) -> Self {
-        Self(self.0.clone(), PhantomData)
-    }
-}
-
-impl<F, I, O> SharedClone for Closure<F, I, O> where F: Fn(I) -> O + Clone {}
+// cannot have `F: Fn(I) -> O` bound here any more
+// is this ok?
+impl<F> SharedClone for Closure<F> where F: Clone {}
 
 pub trait App {
     fn update(&mut self, op_num: u32, op: &[u8]) -> Vec<u8>;

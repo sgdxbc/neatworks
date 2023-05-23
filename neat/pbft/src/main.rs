@@ -97,8 +97,8 @@ async fn run_clients(cli: Cli, route: ClientTable, replica_route: ReplicaTable) 
             // Closure::from(|(_, message)| message).install(
             //     de()
             Lift(de(), TransportLift).install(
-                Closure::from(|(_, message)| message)
-                    .install(Closure::from(Message::Handle).install(client_wire.state())),
+                Closure(|(_, message)| message)
+                    .install(Closure(Message::Handle).install(client_wire.state())),
             ),
         );
         let workload = Workload {
@@ -109,7 +109,7 @@ async fn run_clients(cli: Cli, route: ClientTable, replica_route: ReplicaTable) 
         let mut client = neat_pbft::Client::new(
             client_id,
             cli.faulty_count,
-            ser().install(Closure::from(Egress::ToAll).install(EgressRoute {
+            ser().install(Closure(Egress::ToAll).install(EgressRoute {
                 route: replica_route.clone(),
                 addr: client_addr,
                 state: egress,
@@ -169,7 +169,7 @@ async fn run_replica(cli: Cli, route: ClientTable, replica_route: ReplicaTable) 
     let app = Null
         .lift(neat_pbft::AppLift::new(replica_id))
         .install_filtered(
-            Closure::from(move |(id, message)| (route.lookup_addr(id), message))
+            Closure(move |(id, message)| (route.lookup_addr(id), message))
                 .install(Lift(ser(), TransportLift).install(egress.clone())),
         );
 
@@ -195,7 +195,7 @@ async fn run_replica(cli: Cli, route: ClientTable, replica_route: ReplicaTable) 
     let mut ingress = neat_udp::In::new(
         &egress,
         Lift(de(), TransportLift).install(
-            Closure::from(|(_, message)| message)
+            Closure(|(_, message)| message)
                 .install(Verify::new(&replica_route, replica_wire.state())),
         ),
     );

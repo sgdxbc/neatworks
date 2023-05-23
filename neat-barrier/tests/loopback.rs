@@ -16,8 +16,8 @@ type UserPayload = u16;
 async fn use_barrier_udp(addr: SocketAddr, service: SocketAddr) -> Message<UserPayload> {
     // 1. listen to barrier message
     let message = Wire::<Message<UserPayload>>::default();
-    let state = Lift(de(), TransportLift)
-        .install(Closure::from(|(_, message)| message).install(message.state()));
+    let state =
+        Lift(de(), TransportLift).install(Closure(|(_, message)| message).install(message.state()));
     let out = neat_udp::Out::bind(addr).await;
     let local_message = out.0.local_addr().unwrap().port();
     let mut ingress = neat_udp::In::new(&out, state);
@@ -82,8 +82,7 @@ async fn use_barrier_tcp(addr: SocketAddr, service: SocketAddr) -> Message<UserP
     let mut connection = neat_tcp::Connection::connect(
         addr,
         service,
-        Lift(de(), TransportLift)
-            .install(Closure::from(|(_, message)| message).install(message.state())),
+        Lift(de(), TransportLift).install(Closure(|(_, message)| message).install(message.state())),
         Wire::default().state(),
     )
     .await;
@@ -93,7 +92,7 @@ async fn use_barrier_tcp(addr: SocketAddr, service: SocketAddr) -> Message<UserP
     let connection = spawn(async move { connection.start().await });
 
     Lift(ser(), TransportLift)
-        .install(Closure::from(From::from).install(dispatch))
+        .install(Closure(From::from).install(dispatch))
         .update((service, local_message));
 
     let mut message = Drive::from(message).recv().await.unwrap();
@@ -121,7 +120,7 @@ async fn provide_barrier_tcp(addr: SocketAddr, count: usize) {
         connections.push(spawn(async move { connection.start().await }));
     }
     let app = Service::new(
-        Lift(ser(), TransportLift).install(Closure::from(From::from).install(dispatch)),
+        Lift(ser(), TransportLift).install(Closure(From::from).install(dispatch)),
         finished.state(),
         count,
     );

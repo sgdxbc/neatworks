@@ -37,7 +37,7 @@ impl<M, E, F> Service<M, E, F> {
 
 impl<M, E, F> State<Transport<M>> for Service<M, E, F>
 where
-    E: State<(SocketAddr, Message<M>)>,
+    E: State<Transport<Message<M>>>,
     F: State<()>,
     M: Clone,
 {
@@ -70,7 +70,7 @@ where
         addr,
         service,
         de().lift_default::<TransportLift>()
-            .install(Closure::from(|(_, message)| message).install(message_wire.state())),
+            .install(Closure(|(_, message)| message).install(message_wire.state())),
         Wire::default().state(),
     )
     .await;
@@ -80,7 +80,7 @@ where
 
     ser()
         .lift_default::<TransportLift>()
-        .install(Closure::from(From::from).install(dispatch))
+        .install(Closure(From::from).install(dispatch))
         .update((service, payload));
 
     let message = Drive::from(message_wire).recv().await.unwrap();
@@ -110,7 +110,7 @@ where
         connections.push(spawn(async move { connection.start().await }));
     }
     let app = Service::new(
-        Lift(ser(), TransportLift).install(Closure::from(From::from).install(dispatch)),
+        Lift(ser(), TransportLift).install(Closure(From::from).install(dispatch)),
         finished.state(),
         count,
     );
