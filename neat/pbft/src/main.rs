@@ -9,11 +9,11 @@ use neat_bincode::{de, ser};
 use neat_core::{
     actor::{Drive, State, Wire},
     app::{Closure, FunctionalState},
-    message::Transport,
+    message::{Egress, EgressLift, Transport, TransportLift},
     route::{ClientTable, ReplicaTable},
-    transport, App, Dispatch,
+    transport, App, Dispatch, Lift,
 };
-use neat_pbft::{client, replica, Replica, Sign, ToReplica, Verify};
+use neat_pbft::{client, Replica, Sign, ToReplica, Verify};
 use rand::{rngs::StdRng, SeedableRng};
 use serde::{Deserialize, Serialize};
 use tokio::{
@@ -57,18 +57,18 @@ struct EgressRoute<S> {
     state: S,
 }
 
-impl<S> State<replica::Egress<Vec<u8>>> for EgressRoute<S>
+impl<S> State<Egress<u8, Vec<u8>>> for EgressRoute<S>
 where
     S: State<Transport<Vec<u8>>>,
 {
-    fn update(&mut self, message: replica::Egress<Vec<u8>>) {
+    fn update(&mut self, message: Egress<u8, Vec<u8>>) {
         match message {
-            replica::Egress::To(replica_id, message) => {
+            Egress::To(replica_id, message) => {
                 let addr = self.route.lookup_addr(replica_id);
                 assert_ne!(addr, self.addr);
                 self.state.update((addr, message))
             }
-            replica::Egress::ToAll(message) => {
+            Egress::ToAll(message) => {
                 for id in 0..self.route.len() as u8 {
                     let addr = self.route.lookup_addr(id);
                     if addr == self.addr {
@@ -94,8 +94,11 @@ async fn run_clients(cli: Cli, route: ClientTable, replica_route: ReplicaTable) 
         let egress = neat_udp::Out::bind(client_addr).await;
         let mut ingress = neat_udp::In::new(
             &egress,
-            transport::Lift(de()).install(
-                Closure::from(|(_, message)| Message::Handle(message)).install(client_wire.state()),
+            // Closure::from(|(_, message)| message).install(
+            //     de()
+            Lift(de(), TransportLift).install(
+                Closure::from(|(_, message)| message)
+                    .install(Closure::from(Message::Handle).install(client_wire.state())),
             ),
         );
         let workload = Workload {
@@ -106,13 +109,11 @@ async fn run_clients(cli: Cli, route: ClientTable, replica_route: ReplicaTable) 
         let mut client = neat_pbft::Client::new(
             client_id,
             cli.faulty_count,
-            Closure::from(replica::Egress::ToAll).install(replica::EgressLift(ser()).install(
-                EgressRoute {
-                    route: replica_route.clone(),
-                    addr: client_addr,
-                    state: egress,
-                },
-            )),
+            ser().install(Closure::from(Egress::ToAll).install(EgressRoute {
+                route: replica_route.clone(),
+                addr: client_addr,
+                state: egress,
+            })),
             workload,
         );
         clients.push(spawn(async move {
@@ -178,19 +179,19 @@ async fn run_replica(cli: Cli, route: ClientTable, replica_route: ReplicaTable) 
         replica_route.len(),
         cli.faulty_count,
         app,
-        replica::EgressLift(Sign::new(&replica_route, replica_id)).install(
-            replica::EgressLift(ser()).install(EgressRoute {
+        Sign::new(&replica_route, replica_id)
+            .lift_default::<EgressLift<_>>()
+            .install(ser().lift_default::<EgressLift<_>>().install(EgressRoute {
                 route: replica_route.clone(),
                 addr: replica_addr,
                 state: egress.clone(),
-            }),
-        ),
+            })),
         control.install(Dispatch::default()),
     );
 
     let mut ingress = neat_udp::In::new(
         &egress,
-        transport::Lift(de()).install(
+        Lift(de(), TransportLift).install(
             Closure::from(|(_, message)| message)
                 .install(Verify::new(&replica_route, replica_wire.state())),
         ),

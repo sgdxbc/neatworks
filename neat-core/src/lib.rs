@@ -14,5 +14,6 @@ pub mod timeout {
     }
 }
 
-pub use app::App;
+pub use actor::State;
+pub use app::{App, FunctionalState, Lift};
 pub use dispatch::Dispatch;

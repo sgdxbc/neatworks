@@ -7,7 +7,7 @@ use neat_bincode::{de, ser};
 use neat_core::{
     actor::{Drive, State, Wire},
     app::{Closure, FunctionalState},
-    message::Transport,
+    message::{Transport, TransportLift},
     transport, Dispatch,
 };
 use serde::{de::DeserializeOwned, Serialize};
@@ -69,8 +69,7 @@ where
     let mut connection = neat_tcp::Connection::connect(
         addr,
         service,
-        // de().lift::<neat_core::message::Transport<&[u8]>>()
-        transport::Lift(de())
+        de().lift_default::<TransportLift>()
             .install(Closure::from(|(_, message)| message).install(message_wire.state())),
         Wire::default().state(),
     )
@@ -79,8 +78,8 @@ where
     dispatch.insert_state(connection.remote_addr, connection.out_state());
     let connection = spawn(async move { connection.start().await });
 
-    transport::Lift(ser())
-        // .lift()
+    ser()
+        .lift_default::<TransportLift>()
         .install(Closure::from(From::from).install(dispatch))
         .update((service, payload));
 

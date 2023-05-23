@@ -18,13 +18,13 @@ pub trait State<Message> {
     }
 }
 
-impl<M, T: State<M>> State<M> for &mut T {
+impl<M, T: State<M> + ?Sized> State<M> for &mut T {
     fn update(&mut self, message: M) {
         T::update(self, message)
     }
 }
 
-impl<M, T: State<M>> State<M> for Box<T> {
+impl<M, T: State<M> + ?Sized> State<M> for Box<T> {
     fn update(&mut self, message: M) {
         T::update(self, message)
     }

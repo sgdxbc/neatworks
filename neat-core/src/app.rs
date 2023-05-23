@@ -23,11 +23,19 @@ pub trait FunctionalState<Input> {
         Install(self, Filtered(state))
     }
 
-    fn lift<M>(self) -> Lift<Self, M>
+    fn lift<L>(self, lift: L) -> Lift<Self, L>
     where
         Self: Sized,
     {
-        Lift(self, PhantomData)
+        Lift(self, lift)
+    }
+
+    fn lift_default<L>(self) -> Lift<Self, L>
+    where
+        Self: Sized,
+        L: Default,
+    {
+        Lift(self, Default::default())
     }
 }
 
@@ -49,8 +57,7 @@ impl<F, I, O> FunctionalState<I> for Closure<F, I, O>
 where
     F: FnMut(I) -> O,
 {
-    // this does not give up any flexibility since closure can never return
-    // reference of captured objects
+    // how to connection `'o` with `I`'s lifetime (if there's any)?
     type Output<'o> = O where Self: 'o;
 
     fn update(&mut self, input: I) -> Self::Output<'_> {
@@ -121,15 +128,15 @@ where
     }
 }
 
-pub struct Lift<S, M>(pub S, PhantomData<M>);
+pub struct Lift<S, L>(pub S, pub L);
 
-// impl<S, M> FunctionalState<M> for Lift<S, M>
-// where
-//     M: crate::message::Lift<'m, S::Input, S>,
-// {
-//     type Output<'o> = M::Out<'o> where Self: 'o;
+impl<S, L, M> FunctionalState<M> for Lift<S, L>
+where
+    L: crate::message::Lift<S, M>,
+{
+    type Output<'o> = L::Out<'o> where Self: 'o;
 
-//     fn update(&mut self, input: M) -> Self::Output<'_> {
-//         input.update(&mut self.0)
-//     }
-// }
+    fn update(&mut self, input: M) -> Self::Output<'_> {
+        self.1.update(&mut self.0, input)
+    }
+}

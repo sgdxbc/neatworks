@@ -8,7 +8,7 @@ use std::collections::HashMap;
 use bincode::Options;
 use neat_core::{
     actor::State,
-    app::{self, FunctionalState},
+    app,
     timeout::{
         self,
         Message::{Set, Unset},
@@ -106,17 +106,7 @@ pub struct Commit {
     pub(crate) replica_id: u8,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum Egress<M> {
-    To(u8, M),
-    ToAll(M), // except self
-}
-
-impl<M> Egress<M> {
-    fn to(replica_id: u8) -> impl Fn(M) -> Self {
-        move |m| Self::To(replica_id, m)
-    }
-}
+pub type Egress = neat_core::message::Egress<u8, ToReplica>;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub enum Timeout {
@@ -174,7 +164,7 @@ impl<U, E, T> Replica<U, E, T> {
 impl<U, E, T> State<ToReplica> for Replica<U, E, T>
 where
     U: for<'m> State<Upcall<'m>>,
-    E: State<Egress<ToReplica>>,
+    E: State<Egress>,
     T: State<timeout::Message<Timeout>>,
 {
     fn update(&mut self, message: ToReplica) {
@@ -256,7 +246,7 @@ fn digest(requests: &[Request]) -> [u8; 32] {
 impl<U, E, T> Replica<U, E, T>
 where
     U: for<'m> State<Upcall<'m>>,
-    E: State<Egress<ToReplica>>,
+    E: State<Egress>,
     T: State<timeout::Message<Timeout>>,
 {
     fn handle_request(&mut self, message: Request) {
@@ -390,11 +380,7 @@ where
             .update(Egress::ToAll(ToReplica::PrePrepare(pre_prepare, requests)));
     }
 
-    fn send_prepare(
-        &mut self,
-        op_num: OpNum,
-        to_whom: impl FnOnce(ToReplica) -> Egress<ToReplica>,
-    ) {
+    fn send_prepare(&mut self, op_num: OpNum, to_whom: impl FnOnce(ToReplica) -> Egress) {
         assert_ne!(self.id, self.primary_id());
         let prepare = Prepare {
             view_num: self.view_num,
@@ -405,7 +391,7 @@ where
         self.egress.update(to_whom(ToReplica::Prepare(prepare)));
     }
 
-    fn send_commit(&mut self, op_num: OpNum, to_whom: impl FnOnce(ToReplica) -> Egress<ToReplica>) {
+    fn send_commit(&mut self, op_num: OpNum, to_whom: impl FnOnce(ToReplica) -> Egress) {
         let commit = Commit {
             view_num: self.view_num,
             op_num,
@@ -465,22 +451,6 @@ where
                 self.upcall.update(upcall);
             }
             self.execute_number += 1;
-        }
-    }
-}
-
-pub struct EgressLift<S>(pub S);
-
-impl<M, S> FunctionalState<Egress<M>> for EgressLift<S>
-where
-    S: FunctionalState<M>,
-{
-    type Output<'output> = Egress<S::Output<'output>> where Self: 'output;
-
-    fn update(&mut self, input: Egress<M>) -> Self::Output<'_> {
-        match input {
-            Egress::To(id, message) => Egress::To(id, self.0.update(message)),
-            Egress::ToAll(message) => Egress::ToAll(self.0.update(message)),
         }
     }
 }
