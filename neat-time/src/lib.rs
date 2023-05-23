@@ -1,6 +1,6 @@
 use std::{marker::PhantomData, time::Duration};
 
-use neat_core::{actor::State, app::FunctionalState, dispatch, timeout};
+use neat_core::{actor::State, app::FunctionalState, dispatch, message::Timeout};
 use tokio::{
     select, spawn,
     sync::mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender},
@@ -100,14 +100,14 @@ pub fn new<S, T>(state: S) -> (Waker<T, S>, Control<T>) {
     )
 }
 
-impl<T> FunctionalState<timeout::Message<T>> for Control<T>
+impl<T> FunctionalState<Timeout<T>> for Control<T>
 where
     T: Clone + Send + 'static,
 {
     type Output<'output> = dispatch::Message<T, Sleeper<T>, Reset> where Self: 'output;
 
-    fn update(&mut self, input: timeout::Message<T>) -> Self::Output<'_> {
-        use {dispatch::Message::*, timeout::Message::*};
+    fn update(&mut self, input: Timeout<T>) -> Self::Output<'_> {
+        use {dispatch::Message::*, Timeout::*};
         match input {
             Set(timeout) => Insert(
                 timeout.clone(),

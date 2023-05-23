@@ -9,8 +9,9 @@ use neat_bincode::{de, ser};
 use neat_core::{
     actor::{Drive, State, Wire},
     app::{Closure, FunctionalState},
+    message::TransportLift,
     route::ClientTable,
-    transport, App, Dispatch,
+    App, Dispatch, Lift,
 };
 use neat_unreplicated::{client, Client, Replica};
 use rand::{rngs::StdRng, SeedableRng};
@@ -66,7 +67,7 @@ async fn run_clients_udp(cli: Cli, route: ClientTable, replica_addr: SocketAddr)
         let egress = neat_udp::Out::bind(client_addr).await;
         let mut ingress = neat_udp::In::new(
             &egress,
-            transport::Lift(de()).install(
+            Lift(de(), TransportLift).install(
                 Closure::from(|(_, message)| Message::Handle(message)).install(client_wire.state()),
             ),
         );
@@ -78,7 +79,7 @@ async fn run_clients_udp(cli: Cli, route: ClientTable, replica_addr: SocketAddr)
         let mut client = Client::new(
             client_id,
             Closure::from(move |message| (replica_addr, message))
-                .install(transport::Lift(ser()).install(egress)),
+                .install(Lift(ser(), TransportLift).install(egress)),
             workload,
         );
         clients.push(spawn(async move {
@@ -129,13 +130,14 @@ async fn run_replica_udp(_cli: Cli, route: ClientTable, replica_addr: SocketAddr
 
     let app = neat_unreplicated::App::from(Null).install_filtered(
         Closure::from(move |(id, message)| (route.lookup_addr(id), message))
-            .install(transport::Lift(ser()).install(egress.clone())),
+            .install(Lift(ser(), TransportLift).install(egress.clone())),
     );
     let mut replica = Replica::new(app);
 
     let mut ingress = neat_udp::In::new(
         &egress,
-        transport::Lift(de()).install(Closure::from(|(_, message)| message).install(&mut replica)),
+        Lift(de(), TransportLift)
+            .install(Closure::from(|(_, message)| message).install(&mut replica)),
     );
     select! {
         _ = ingress.start() => unreachable!(),
@@ -160,7 +162,7 @@ async fn run_clients_tcp(cli: Cli, route: ClientTable, replica_addr: SocketAddr)
         let mut connection = neat_tcp::Connection::connect(
             client_addr,
             replica_addr,
-            transport::Lift(de()).install(
+            Lift(de(), TransportLift).install(
                 Closure::from(|(_, message)| Message::Handle(message)).install(client_wire.state()),
             ),
             Wire::default().state(),
@@ -178,7 +180,7 @@ async fn run_clients_tcp(cli: Cli, route: ClientTable, replica_addr: SocketAddr)
         let mut client = Client::new(
             client_id,
             Closure::from(move |message| (replica_addr, message)).install(
-                transport::Lift(ser()).install(Closure::from(From::from).install(dispatch)),
+                Lift(ser(), TransportLift).install(Closure::from(From::from).install(dispatch)),
             ),
             workload,
         );
@@ -233,7 +235,7 @@ async fn run_replica_tcp(_cli: Cli, route: ClientTable, replica_addr: SocketAddr
     for _ in 0..route.len() {
         let mut connection = listener
             .accept(
-                transport::Lift(de())
+                Lift(de(), TransportLift)
                     .install(Closure::from(|(_, message)| message).install(replica_wire.state())),
                 disconnected.state(),
             )
@@ -243,8 +245,9 @@ async fn run_replica_tcp(_cli: Cli, route: ClientTable, replica_addr: SocketAddr
     }
 
     let app = neat_unreplicated::App::from(Null).install_filtered(
-        Closure::from(move |(id, message)| (route.lookup_addr(id), message))
-            .install(transport::Lift(ser()).install(Closure::from(From::from).install(dispatch))),
+        Closure::from(move |(id, message)| (route.lookup_addr(id), message)).install(
+            Lift(ser(), TransportLift).install(Closure::from(From::from).install(dispatch)),
+        ),
     );
     let mut replica = Replica::new(app);
 
@@ -271,7 +274,7 @@ async fn run_clients_tls(cli: Cli, route: ClientTable, replica_addr: SocketAddr)
         let connection = neat_tcp::Connection::connect(
             client_addr,
             replica_addr,
-            transport::Lift(de()).install(
+            Lift(de(), TransportLift).install(
                 Closure::from(|(_, message)| Message::Handle(message)).install(client_wire.state()),
             ),
             Wire::default().state(),
@@ -292,7 +295,7 @@ async fn run_clients_tls(cli: Cli, route: ClientTable, replica_addr: SocketAddr)
         let mut client = Client::new(
             client_id,
             Closure::from(move |message| (replica_addr, message)).install(
-                transport::Lift(ser()).install(Closure::from(From::from).install(dispatch)),
+                Lift(ser(), TransportLift).install(Closure::from(From::from).install(dispatch)),
             ),
             workload,
         );
@@ -348,7 +351,7 @@ async fn run_replica_tls(_cli: Cli, route: ClientTable, replica_addr: SocketAddr
     for _ in 0..route.len() {
         let connection = listener
             .accept(
-                transport::Lift(de())
+                Lift(de(), TransportLift)
                     .install(Closure::from(|(_, message)| message).install(replica_wire.state())),
                 disconnected.state(),
             )
@@ -359,8 +362,9 @@ async fn run_replica_tls(_cli: Cli, route: ClientTable, replica_addr: SocketAddr
     }
 
     let app = neat_unreplicated::App::from(Null).install_filtered(
-        Closure::from(move |(id, message)| (route.lookup_addr(id), message))
-            .install(transport::Lift(ser()).install(Closure::from(From::from).install(dispatch))),
+        Closure::from(move |(id, message)| (route.lookup_addr(id), message)).install(
+            Lift(ser(), TransportLift).install(Closure::from(From::from).install(dispatch)),
+        ),
     );
     let mut replica = Replica::new(app);
 

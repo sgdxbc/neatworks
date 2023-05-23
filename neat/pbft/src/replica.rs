@@ -9,10 +9,7 @@ use bincode::Options;
 use neat_core::{
     actor::State,
     app,
-    timeout::{
-        self,
-        Message::{Set, Unset},
-    },
+    message::Timeout::{Set, Unset},
 };
 use serde::{Deserialize, Serialize};
 
@@ -79,8 +76,6 @@ pub enum ToReplica {
     PrePrepare(PrePrepare, Vec<Request>),
     Prepare(Prepare),
     Commit(Commit),
-
-    Timeout(Timeout), //
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -109,11 +104,13 @@ pub struct Commit {
 pub type Egress = neat_core::message::Egress<u8, ToReplica>;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
-pub enum Timeout {
+pub enum TimeoutEvent {
     // view change
     Prepare(ViewNum, OpNum),
     Commit(ViewNum, OpNum),
 }
+
+pub type Timeout = neat_core::message::Timeout<TimeoutEvent>;
 
 pub struct Replica<U, E, T> {
     id: u8,
@@ -165,7 +162,7 @@ impl<U, E, T> State<ToReplica> for Replica<U, E, T>
 where
     U: for<'m> State<Upcall<'m>>,
     E: State<Egress>,
-    T: State<timeout::Message<Timeout>>,
+    T: State<Timeout>,
 {
     fn update(&mut self, message: ToReplica) {
         match message {
@@ -173,8 +170,19 @@ where
             ToReplica::PrePrepare(message, requests) => self.handle_pre_prepare(message, requests),
             ToReplica::Prepare(message) => self.handle_prepare(message),
             ToReplica::Commit(message) => self.handle_commit(message),
+        }
+    }
+}
 
-            ToReplica::Timeout(Timeout::Prepare(view_num, op_num)) => {
+impl<U, E, T> State<TimeoutEvent> for Replica<U, E, T>
+where
+    U: for<'m> State<Upcall<'m>>,
+    E: State<Egress>,
+    T: State<Timeout>,
+{
+    fn update(&mut self, message: TimeoutEvent) {
+        match message {
+            TimeoutEvent::Prepare(view_num, op_num) => {
                 assert_eq!(self.view_num, view_num);
                 assert!(self.prepared_slot(op_num).is_none());
                 //
@@ -183,14 +191,16 @@ where
                 } else {
                     self.send_prepare(op_num, Egress::ToAll)
                 }
-                self.timeout.update(Set(Timeout::Prepare(view_num, op_num)))
+                self.timeout
+                    .update(Set(TimeoutEvent::Prepare(view_num, op_num)))
             }
-            ToReplica::Timeout(Timeout::Commit(view_num, op_num)) => {
+            TimeoutEvent::Commit(view_num, op_num) => {
                 assert_eq!(self.view_num, view_num);
                 assert!(self.committed_slot(op_num).is_none());
                 //
                 self.send_commit(op_num, Egress::ToAll);
-                self.timeout.update(Set(Timeout::Commit(view_num, op_num)))
+                self.timeout
+                    .update(Set(TimeoutEvent::Commit(view_num, op_num)))
             }
         }
     }
@@ -247,7 +257,7 @@ impl<U, E, T> Replica<U, E, T>
 where
     U: for<'m> State<Upcall<'m>>,
     E: State<Egress>,
-    T: State<timeout::Message<Timeout>>,
+    T: State<Timeout>,
 {
     fn handle_request(&mut self, message: Request) {
         if self.id != self.primary_id() {
@@ -289,7 +299,7 @@ where
             .insert(self.op_num, (pre_prepare, requests));
         self.send_pre_prepare(self.op_num);
         self.timeout
-            .update(Set(Timeout::Prepare(self.view_num, self.op_num)));
+            .update(Set(TimeoutEvent::Prepare(self.view_num, self.op_num)));
         assert!(!self.prepared.contains_key(&self.op_num));
         assert!(!self.committed.contains_key(&self.op_num));
     }
@@ -322,7 +332,7 @@ where
 
         self.send_prepare(op_num, Egress::ToAll);
         self.timeout
-            .update(Set(Timeout::Prepare(self.view_num, op_num)));
+            .update(Set(TimeoutEvent::Prepare(self.view_num, op_num)));
         // `pre_prepares` implies the insertion
         // self.insert_prepare(prepare);
     }
@@ -411,9 +421,9 @@ where
         if self.prepared_slot(op_num).is_some() {
             self.send_commit(op_num, Egress::ToAll);
             self.timeout
-                .update(Unset(Timeout::Prepare(self.view_num, op_num)));
+                .update(Unset(TimeoutEvent::Prepare(self.view_num, op_num)));
             self.timeout
-                .update(Set(Timeout::Commit(self.view_num, op_num)));
+                .update(Set(TimeoutEvent::Commit(self.view_num, op_num)));
             // `pre_prepares` implies the insertion
             // self.insert_commit(commit);
 
@@ -430,7 +440,7 @@ where
             .insert(commit.replica_id, commit);
         if self.committed_slot(op_num).is_some() {
             self.timeout
-                .update(Unset(Timeout::Commit(self.view_num, op_num)));
+                .update(Unset(TimeoutEvent::Commit(self.view_num, op_num)));
             self.execute();
         }
     }

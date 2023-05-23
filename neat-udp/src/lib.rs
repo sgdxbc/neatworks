@@ -1,6 +1,6 @@
 use std::{net::SocketAddr, sync::Arc};
 
-use neat_core::{actor, transport};
+use neat_core::{actor, message::Transport};
 use tokio::{net::UdpSocket, spawn};
 
 pub struct In<A> {
@@ -25,7 +25,7 @@ impl<A> In<A> {
 
     pub async fn start(&mut self)
     where
-        A: for<'a> actor::State<transport::Message<&'a [u8]>>,
+        A: for<'a> actor::State<Transport<&'a [u8]>>,
     {
         let mut buf = vec![0; 65536];
         loop {
@@ -44,8 +44,8 @@ impl Out {
     }
 }
 
-impl actor::State<transport::Message<Vec<u8>>> for Out {
-    fn update(&mut self, message: transport::Message<Vec<u8>>) {
+impl actor::State<Transport<Vec<u8>>> for Out {
+    fn update(&mut self, message: Transport<Vec<u8>>) {
         let (target, buf) = message;
         let socket = self.0.clone();
         spawn(async move {

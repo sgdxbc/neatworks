@@ -11,9 +11,9 @@ use neat_core::{
     app::{Closure, FunctionalState},
     message::{Egress, EgressLift, Transport, TransportLift},
     route::{ClientTable, ReplicaTable},
-    transport, App, Dispatch, Lift,
+    App, Dispatch, Lift,
 };
-use neat_pbft::{client, Replica, Sign, ToReplica, Verify};
+use neat_pbft::{client, Replica, Sign, Verify};
 use rand::{rngs::StdRng, SeedableRng};
 use serde::{Deserialize, Serialize};
 use tokio::{
@@ -168,11 +168,12 @@ async fn run_replica(cli: Cli, route: ClientTable, replica_route: ReplicaTable) 
 
     let app = neat_pbft::App::new(replica_id, Null).install_filtered(
         Closure::from(move |(id, message)| (route.lookup_addr(id), message))
-            .install(transport::Lift(ser()).install(egress.clone())),
+            .install(Lift(ser(), TransportLift).install(egress.clone())),
     );
 
-    let (mut waker, control) =
-        neat_time::new(Closure::from(ToReplica::Timeout).install(replica_wire.state()));
+    // TODO
+    let replica_wire2 = Wire::default();
+    let (mut waker, control) = neat_time::new(replica_wire2.state());
 
     let mut replica = Replica::new(
         replica_id,

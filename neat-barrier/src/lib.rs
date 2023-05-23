@@ -8,7 +8,7 @@ use neat_core::{
     actor::{Drive, State, Wire},
     app::{Closure, FunctionalState},
     message::{Transport, TransportLift},
-    transport, Dispatch,
+    Dispatch, Lift,
 };
 use serde::{de::DeserializeOwned, Serialize};
 use tokio::spawn;
@@ -102,7 +102,7 @@ where
     for _ in 0..count {
         let mut connection = listener
             .accept(
-                transport::Lift(de::<M>()).install(app_wire.state()),
+                Lift(de::<M>(), TransportLift).install(app_wire.state()),
                 disconnected.state(),
             )
             .await;
@@ -110,7 +110,7 @@ where
         connections.push(spawn(async move { connection.start().await }));
     }
     let app = Service::new(
-        transport::Lift(ser()).install(Closure::from(From::from).install(dispatch)),
+        Lift(ser(), TransportLift).install(Closure::from(From::from).install(dispatch)),
         finished.state(),
         count,
     );

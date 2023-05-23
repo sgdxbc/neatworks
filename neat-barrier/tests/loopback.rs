@@ -3,9 +3,10 @@ use std::{iter::repeat_with, net::SocketAddr};
 use neat_barrier::{Message, Service};
 use neat_bincode::{de, ser};
 use neat_core::{
-    actor::{Drive, State, Wire},
+    actor::{Drive, Wire},
     app::{Closure, FunctionalState},
-    transport, Dispatch,
+    message::TransportLift,
+    Dispatch, Lift, State,
 };
 
 use tokio::spawn;
@@ -15,7 +16,7 @@ type UserPayload = u16;
 async fn use_barrier_udp(addr: SocketAddr, service: SocketAddr) -> Message<UserPayload> {
     // 1. listen to barrier message
     let message = Wire::<Message<UserPayload>>::default();
-    let state = transport::Lift(de())
+    let state = Lift(de(), TransportLift)
         .install(Closure::from(|(_, message)| message).install(message.state()));
     let out = neat_udp::Out::bind(addr).await;
     let local_message = out.0.local_addr().unwrap().port();
@@ -23,7 +24,7 @@ async fn use_barrier_udp(addr: SocketAddr, service: SocketAddr) -> Message<UserP
     let ingress = spawn(async move { ingress.start().await });
 
     // 2. tx
-    transport::Lift(ser())
+    Lift(ser(), TransportLift)
         .install(out)
         .update((service, local_message));
 
@@ -36,9 +37,9 @@ async fn use_barrier_udp(addr: SocketAddr, service: SocketAddr) -> Message<UserP
 
 async fn provide_barrier_udp(addr: SocketAddr, count: usize) {
     let out = neat_udp::Out::bind(addr).await;
-    let egress = transport::Lift(ser()).install(out.clone());
+    let egress = Lift(ser(), TransportLift).install(out.clone());
     let finished = Wire::default();
-    let state = transport::Lift(de()).install(Service::<UserPayload, _, _>::new(
+    let state = Lift(de(), TransportLift).install(Service::<UserPayload, _, _>::new(
         egress,
         finished.state(),
         count,
@@ -81,7 +82,7 @@ async fn use_barrier_tcp(addr: SocketAddr, service: SocketAddr) -> Message<UserP
     let mut connection = neat_tcp::Connection::connect(
         addr,
         service,
-        transport::Lift(de())
+        Lift(de(), TransportLift)
             .install(Closure::from(|(_, message)| message).install(message.state())),
         Wire::default().state(),
     )
@@ -91,7 +92,7 @@ async fn use_barrier_tcp(addr: SocketAddr, service: SocketAddr) -> Message<UserP
     dispatch.insert_state(connection.remote_addr, connection.out_state());
     let connection = spawn(async move { connection.start().await });
 
-    transport::Lift(ser())
+    Lift(ser(), TransportLift)
         .install(Closure::from(From::from).install(dispatch))
         .update((service, local_message));
 
@@ -112,7 +113,7 @@ async fn provide_barrier_tcp(addr: SocketAddr, count: usize) {
     for _ in 0..count {
         let mut connection = listener
             .accept(
-                transport::Lift(de::<UserPayload>()).install(app_wire.state()),
+                Lift(de::<UserPayload>(), TransportLift).install(app_wire.state()),
                 disconnected.state(),
             )
             .await;
@@ -120,7 +121,7 @@ async fn provide_barrier_tcp(addr: SocketAddr, count: usize) {
         connections.push(spawn(async move { connection.start().await }));
     }
     let app = Service::new(
-        transport::Lift(ser()).install(Closure::from(From::from).install(dispatch)),
+        Lift(ser(), TransportLift).install(Closure::from(From::from).install(dispatch)),
         finished.state(),
         count,
     );

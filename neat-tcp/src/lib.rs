@@ -1,6 +1,6 @@
 use std::net::SocketAddr;
 
-use neat_core::{actor::State, transport};
+use neat_core::{actor::State, message::Transport};
 use tokio::{
     io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, BufStream},
     net::{TcpListener, TcpSocket, TcpStream},
@@ -76,7 +76,7 @@ impl<S, D, T> GeneralConnection<S, D, T> {
 
     pub async fn start(&mut self)
     where
-        S: for<'m> State<transport::Message<&'m [u8]>>,
+        S: for<'m> State<Transport<&'m [u8]>>,
         D: State<Disconnected>,
         // require Unpin or pin it locally?
         T: AsyncRead + AsyncWrite + Unpin,

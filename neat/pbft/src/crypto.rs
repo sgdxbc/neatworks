@@ -8,7 +8,7 @@ pub type Signature = ed25519_dalek::Signature;
 
 fn replica_id(message: &ToReplica, n: usize) -> u8 {
     match message {
-        ToReplica::Request(_) | ToReplica::Timeout(_) => unimplemented!(),
+        ToReplica::Request(_) => unimplemented!(),
         ToReplica::PrePrepare(message, _) => (message.view_num as usize % n) as u8,
         ToReplica::Prepare(message) => message.replica_id,
         ToReplica::Commit(message) => message.replica_id,
