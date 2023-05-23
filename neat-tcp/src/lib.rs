@@ -76,8 +76,8 @@ impl<S, D, T> GeneralConnection<S, D, T> {
 
     pub async fn start(&mut self)
     where
-        S: for<'m> State<'m, Message = transport::Message<&'m [u8]>>,
-        D: for<'m> State<'m, Message = Disconnected>,
+        S: for<'m> State<transport::Message<&'m [u8]>>,
+        D: State<Disconnected>,
         // require Unpin or pin it locally?
         T: AsyncRead + AsyncWrite + Unpin,
     {
@@ -111,10 +111,8 @@ impl<S, D, T> GeneralConnection<S, D, T> {
     }
 }
 
-impl State<'_> for ConnectionOut {
-    type Message = Vec<u8>;
-
-    fn update(&mut self, message: Self::Message) {
+impl State<Vec<u8>> for ConnectionOut {
+    fn update(&mut self, message: Vec<u8>) {
         if self.0.send(message).is_err() {
             //
         }

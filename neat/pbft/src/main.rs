@@ -9,6 +9,7 @@ use neat_bincode::{de, ser};
 use neat_core::{
     actor::{Drive, State, Wire},
     app::{Closure, FunctionalState},
+    message::Transport,
     route::{ClientTable, ReplicaTable},
     transport, App, Dispatch,
 };
@@ -36,13 +37,11 @@ struct Workload<I> {
     invoke: I,
 }
 
-impl<I> State<'_> for Workload<I>
+impl<I> State<client::Result> for Workload<I>
 where
-    I: for<'m> State<'m, Message = client::Message>,
+    I: State<client::Message>,
 {
-    type Message = client::Result;
-
-    fn update(&mut self, message: Self::Message) {
+    fn update(&mut self, message: client::Result) {
         assert_eq!(message, neat_pbft::client::Result(Default::default()));
         let now = Instant::now();
         self.latencies.push(now - self.outstanding_start);
@@ -58,13 +57,11 @@ struct EgressRoute<S> {
     state: S,
 }
 
-impl<'m, S> State<'m> for EgressRoute<S>
+impl<S> State<replica::Egress<Vec<u8>>> for EgressRoute<S>
 where
-    S: State<'m, Message = (SocketAddr, Vec<u8>)>,
+    S: State<Transport<Vec<u8>>>,
 {
-    type Message = replica::Egress<Vec<u8>>;
-
-    fn update(&mut self, message: Self::Message) {
+    fn update(&mut self, message: replica::Egress<Vec<u8>>) {
         match message {
             replica::Egress::To(replica_id, message) => {
                 let addr = self.route.lookup_addr(replica_id);

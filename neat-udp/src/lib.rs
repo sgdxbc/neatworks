@@ -25,7 +25,7 @@ impl<A> In<A> {
 
     pub async fn start(&mut self)
     where
-        A: for<'a> actor::State<'a, Message = transport::Message<&'a [u8]>>,
+        A: for<'a> actor::State<transport::Message<&'a [u8]>>,
     {
         let mut buf = vec![0; 65536];
         loop {
@@ -44,10 +44,8 @@ impl Out {
     }
 }
 
-impl actor::State<'_> for Out {
-    type Message = transport::Message<Vec<u8>>;
-
-    fn update(&mut self, message: Self::Message) {
+impl actor::State<transport::Message<Vec<u8>>> for Out {
+    fn update(&mut self, message: transport::Message<Vec<u8>>) {
         let (target, buf) = message;
         let socket = self.0.clone();
         spawn(async move {

@@ -60,10 +60,8 @@ impl<T> Sleeper<T> {
 
 pub struct Reset;
 
-impl<T> State<'_> for Sleeper<T> {
-    type Message = Reset;
-
-    fn update(&mut self, Reset: Self::Message) {
+impl<T> State<Reset> for Sleeper<T> {
+    fn update(&mut self, Reset: Reset) {
         if self.reset.send(()).is_err() {
             //
         }
@@ -79,7 +77,7 @@ pub struct Waker<T, S> {
 impl<T, S> Waker<T, S> {
     pub async fn start(&mut self)
     where
-        S: for<'m> State<'m, Message = T>,
+        S: State<T>,
     {
         while let Ok(timeout) = self.wake.recv_async().await {
             self.state.update(timeout)
@@ -102,14 +100,13 @@ pub fn new<S, T>(state: S) -> (Waker<T, S>, Control<T>) {
     )
 }
 
-impl<T> FunctionalState<'_> for Control<T>
+impl<T> FunctionalState<timeout::Message<T>> for Control<T>
 where
     T: Clone + Send + 'static,
 {
-    type Input = timeout::Message<T>;
     type Output<'output> = dispatch::Message<T, Sleeper<T>, Reset> where Self: 'output;
 
-    fn update(&mut self, input: Self::Input) -> Self::Output<'_> {
+    fn update(&mut self, input: timeout::Message<T>) -> Self::Output<'_> {
         use {dispatch::Message::*, timeout::Message::*};
         match input {
             Set(timeout) => Insert(

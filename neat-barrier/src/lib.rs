@@ -7,6 +7,7 @@ use neat_bincode::{de, ser};
 use neat_core::{
     actor::{Drive, State, Wire},
     app::{Closure, FunctionalState},
+    message::Transport,
     transport, Dispatch,
 };
 use serde::{de::DeserializeOwned, Serialize};
@@ -34,15 +35,13 @@ impl<M, E, F> Service<M, E, F> {
     }
 }
 
-impl<M, E, F> State<'_> for Service<M, E, F>
+impl<M, E, F> State<Transport<M>> for Service<M, E, F>
 where
-    E: for<'m> State<'m, Message = (SocketAddr, Message<M>)>,
-    F: for<'m> State<'m, Message = ()>,
+    E: State<(SocketAddr, Message<M>)>,
+    F: State<()>,
     M: Clone,
 {
-    type Message = (SocketAddr, M);
-
-    fn update(&mut self, message: Self::Message) {
+    fn update(&mut self, message: Transport<M>) {
         assert!(self.accumulated.len() < self.count);
         let (remote, message) = message;
         let prev = self.accumulated.insert(remote, message);
@@ -80,8 +79,8 @@ where
     dispatch.insert_state(connection.remote_addr, connection.out_state());
     let connection = spawn(async move { connection.start().await });
 
-    ser()
-        .lift()
+    transport::Lift(ser())
+        // .lift()
         .install(Closure::from(From::from).install(dispatch))
         .update((service, payload));
 

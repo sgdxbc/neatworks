@@ -6,14 +6,13 @@ pub type Message<M> = (SocketAddr, M);
 
 pub struct Lift<S>(pub S);
 
-impl<'m, S> FunctionalState<'m> for Lift<S>
+impl<M, S> FunctionalState<Message<M>> for Lift<S>
 where
-    S: FunctionalState<'m>,
+    S: FunctionalState<M>,
 {
-    type Input = Message<S::Input>;
-    type Output<'output> = Message<S::Output<'output>> where Self: 'output;
+    type Output<'o> = Message<S::Output<'o>> where Self: 'o;
 
-    fn update(&mut self, input: Self::Input) -> Self::Output<'_> {
+    fn update(&mut self, input: Message<M>) -> Self::Output<'_> {
         let (addr, message) = input;
         (addr, self.0.update(message))
     }

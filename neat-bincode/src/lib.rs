@@ -19,14 +19,13 @@ impl<M> Copy for De<M> {}
 
 impl<M> SharedClone for De<M> {}
 
-impl<'i, M> FunctionalState<'i> for De<M>
+impl<M> FunctionalState<&'_ [u8]> for De<M>
 where
     M: DeserializeOwned,
 {
-    type Input = &'i [u8];
     type Output<'output> = M where Self: 'output;
 
-    fn update(&mut self, input: Self::Input) -> Self::Output<'_> {
+    fn update(&mut self, input: &[u8]) -> Self::Output<'_> {
         bincode::options()
             //
             .allow_trailing_bytes()
@@ -35,16 +34,14 @@ where
     }
 }
 
-pub const fn de<M>(
-) -> impl for<'i, 'o> FunctionalState<'i, Input = &'i [u8], Output<'o> = M> + SharedClone
+pub const fn de<M>() -> impl for<'i, 'o> FunctionalState<&'i [u8], Output<'o> = M> + SharedClone
 where
     M: DeserializeOwned + 'static,
 {
     De(PhantomData)
 }
 
-pub fn ser<M>(
-) -> impl for<'i, 'o> FunctionalState<'i, Input = M, Output<'o> = Vec<u8>> + SharedClone
+pub fn ser<M>() -> impl for<'o> FunctionalState<M, Output<'o> = Vec<u8>> + SharedClone
 where
     M: Serialize + 'static,
 {

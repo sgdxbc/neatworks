@@ -1,11 +1,9 @@
 use tokio::sync::mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender};
 
-pub trait State<'message> {
-    type Message;
+pub trait State<Message> {
+    fn update(&mut self, message: Message);
 
-    fn update(&mut self, message: Self::Message);
-
-    fn boxed(self) -> Box<dyn State<'message, Message = Self::Message>>
+    fn boxed(self) -> Box<dyn State<Message>>
     where
         Self: Sized + 'static,
     {
@@ -20,18 +18,14 @@ pub trait State<'message> {
     }
 }
 
-impl<'m, T: State<'m>> State<'m> for &mut T {
-    type Message = T::Message;
-
-    fn update(&mut self, message: Self::Message) {
+impl<M, T: State<M>> State<M> for &mut T {
+    fn update(&mut self, message: M) {
         T::update(self, message)
     }
 }
 
-impl<'m, T: State<'m>> State<'m> for Box<T> {
-    type Message = T::Message;
-
-    fn update(&mut self, message: Self::Message) {
+impl<M, T: State<M>> State<M> for Box<T> {
+    fn update(&mut self, message: M) {
         T::update(self, message)
     }
 }
@@ -62,10 +56,8 @@ impl<M> Clone for WireState<M> {
 
 impl<M> SharedClone for WireState<M> {}
 
-impl<M> State<'_> for WireState<M> {
-    type Message = M;
-
-    fn update(&mut self, message: Self::Message) {
+impl<M> State<M> for WireState<M> {
+    fn update(&mut self, message: M) {
         if self.0.send(message).is_err() {
             //
         }
@@ -99,7 +91,7 @@ impl<M> Drive<M> {
         self.0.recv().await
     }
 
-    pub async fn run(&mut self, mut state: impl State<'_, Message = M>) {
+    pub async fn run(&mut self, mut state: impl State<M>) {
         while let Some(message) = self.0.recv().await {
             state.update(message)
         }
@@ -108,13 +100,12 @@ impl<M> Drive<M> {
 
 pub struct Filtered<S>(pub S);
 
-impl<'m, S> State<'m> for Filtered<S>
+// TODO can (or is it necessary to) generalize `Option<_>` into `impl Into<_>`?
+impl<M, S> State<Option<M>> for Filtered<S>
 where
-    S: State<'m>,
+    S: State<M>,
 {
-    type Message = Option<S::Message>; // TODO can generalize `Option<_>` into `impl Into<_>`?
-
-    fn update(&mut self, message: Self::Message) {
+    fn update(&mut self, message: Option<M>) {
         if let Some(message) = message {
             self.0.update(message)
         }

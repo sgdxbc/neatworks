@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use neat_core::actor;
+use neat_core::actor::State;
 
 use crate::{Reply, Request};
 
@@ -39,14 +39,12 @@ impl<O, R> Client<O, R> {
     }
 }
 
-impl<O, R> actor::State<'_> for Client<O, R>
+impl<O, R> State<Message> for Client<O, R>
 where
-    O: for<'m> actor::State<'m, Message = Request>,
-    R: for<'m> actor::State<'m, Message = Result>,
+    O: State<Request>,
+    R: State<Result>,
 {
-    type Message = Message;
-
-    fn update(&mut self, message: Self::Message) {
+    fn update(&mut self, message: Message) {
         match message {
             Message::Invoke(op) => self.invoke(op),
             Message::Handle(message) => self.handle(message),
@@ -57,8 +55,8 @@ where
 
 impl<O, R> Client<O, R>
 where
-    O: for<'m> actor::State<'m, Message = Request>,
-    R: for<'m> actor::State<'m, Message = Result>,
+    O: State<Request>,
+    R: State<Result>,
 {
     fn invoke(&mut self, op: Vec<u8>) {
         assert!(self.op.is_none());

@@ -2,13 +2,12 @@ use std::marker::PhantomData;
 
 use crate::actor::{Filtered, SharedClone, State};
 
-pub trait FunctionalState<'input> {
-    type Input;
+pub trait FunctionalState<Input> {
     type Output<'output>
     where
         Self: 'output;
 
-    fn update(&mut self, input: Self::Input) -> Self::Output<'_>;
+    fn update(&mut self, input: Input) -> Self::Output<'_>;
 
     fn install<S>(self, state: S) -> Install<Self, S>
     where
@@ -46,14 +45,15 @@ impl<F, I, O> From<F> for Closure<F, I, O> {
     }
 }
 
-impl<F, I, O> FunctionalState<'_> for Closure<F, I, O>
+impl<F, I, O> FunctionalState<I> for Closure<F, I, O>
 where
     F: FnMut(I) -> O,
 {
-    type Input = I;
+    // this does not give up any flexibility since closure can never return
+    // reference of captured objects
     type Output<'o> = O where Self: 'o;
 
-    fn update(&mut self, input: Self::Input) -> Self::Output<'_> {
+    fn update(&mut self, input: I) -> Self::Output<'_> {
         (self.0)(input)
     }
 }
@@ -75,11 +75,10 @@ pub trait App {
 
 pub type Message<'m> = (u32, &'m [u8]);
 
-impl<'i, A: App> FunctionalState<'i> for A {
-    type Input = Message<'i>;
+impl<A: App> FunctionalState<Message<'_>> for A {
     type Output<'o> = Vec<u8> where A: 'o;
 
-    fn update(&mut self, input: Self::Input) -> Self::Output<'_> {
+    fn update(&mut self, input: Message<'_>) -> Self::Output<'_> {
         let (op_num, op) = input;
         self.update(op_num, op)
     }
@@ -89,14 +88,12 @@ impl<'i, A: App> FunctionalState<'i> for A {
 #[derive(Debug, Clone)]
 pub struct Install<A, S>(pub A, pub S);
 
-impl<'i, A, S> State<'i> for Install<A, S>
+impl<M, A, S> State<M> for Install<A, S>
 where
-    A: FunctionalState<'i>,
-    S: for<'o> State<'o, Message = A::Output<'o>>,
+    A: FunctionalState<M>,
+    S: for<'o> State<A::Output<'o>>,
 {
-    type Message = A::Input;
-
-    fn update(&mut self, message: Self::Message) {
+    fn update(&mut self, message: M) {
         self.1.update(self.0.update(message))
     }
 }
@@ -110,16 +107,15 @@ where
 
 pub struct Inspect<S>(pub S);
 
-impl<'m, S> FunctionalState<'m> for Inspect<S>
+impl<M, S> FunctionalState<M> for Inspect<S>
 where
-    S: State<'m>,
-    S::Message: Clone,
+    S: State<M>,
+    M: Clone,
 {
-    type Input = S::Message;
-    // probably need to adjust
-    type Output<'output> = S::Message where Self: 'output;
+    // is it expected to discard lifetime?
+    type Output<'output> = M where Self: 'output;
 
-    fn update(&mut self, input: Self::Input) -> Self::Output<'_> {
+    fn update(&mut self, input: M) -> Self::Output<'_> {
         self.0.update(input.clone());
         input
     }
@@ -127,15 +123,13 @@ where
 
 pub struct Lift<S, M>(pub S, PhantomData<M>);
 
-impl<'m, S, M> FunctionalState<'m> for Lift<S, M>
-where
-    S: FunctionalState<'m>,
-    M: crate::message::Lift<'m, S::Input, S>,
-{
-    type Input = M;
-    type Output<'o> = M::Out<'o> where Self: 'o;
+// impl<S, M> FunctionalState<M> for Lift<S, M>
+// where
+//     M: crate::message::Lift<'m, S::Input, S>,
+// {
+//     type Output<'o> = M::Out<'o> where Self: 'o;
 
-    fn update(&mut self, input: Self::Input) -> Self::Output<'_> {
-        input.update(&mut self.0)
-    }
-}
+//     fn update(&mut self, input: M) -> Self::Output<'_> {
+//         input.update(&mut self.0)
+//     }
+// }

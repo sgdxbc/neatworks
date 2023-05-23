@@ -36,14 +36,12 @@ impl<K, S, M> From<(K, M)> for Message<K, S, M> {
     }
 }
 
-impl<'m, K, S, M> State<'m> for Dispatch<K, S>
+impl<K, S, M> State<Message<K, S, M>> for Dispatch<K, S>
 where
-    S: State<'m, Message = M>,
+    S: State<M>,
     K: Eq + Hash,
 {
-    type Message = Message<K, S, M>;
-
-    fn update(&mut self, message: Self::Message) {
+    fn update(&mut self, message: Message<K, S, M>) {
         match message {
             Message::Insert(k, state) => {
                 let evicted = self.insert_state(k, state);

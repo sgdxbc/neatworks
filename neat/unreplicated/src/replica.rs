@@ -22,13 +22,11 @@ impl<U> Replica<U> {
     }
 }
 
-impl<U> actor::State<'_> for Replica<U>
+impl<U> actor::State<Request> for Replica<U>
 where
-    U: for<'m> actor::State<'m, Message = Upcall>,
+    U: actor::State<Upcall>,
 {
-    type Message = Request;
-
-    fn update(&mut self, message: Self::Message) {
+    fn update(&mut self, message: Request) {
         self.op_num += 1;
         let upcall = Upcall {
             op_num: self.op_num,
@@ -54,14 +52,13 @@ impl<A> From<A> for App<A> {
     }
 }
 
-impl<A> app::FunctionalState<'_> for App<A>
+impl<A> app::FunctionalState<Upcall> for App<A>
 where
     A: neat_core::App + 'static,
 {
-    type Input = Upcall;
     type Output<'a> = Option<(u32, Reply)>;
 
-    fn update(&mut self, input: Self::Input) -> Self::Output<'_> {
+    fn update(&mut self, input: Upcall) -> Self::Output<'_> {
         match self.replies.get(&input.client_id) {
             Some(reply) if reply.request_num > input.request_num => return None,
             Some(reply) if reply.request_num == input.request_num => {

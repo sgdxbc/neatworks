@@ -31,13 +31,11 @@ impl<S> Verify<S> {
 
 // not implement as PureState because later may need to send out `ViewChange`
 // to another state
-impl<'m, S> State<'m> for Verify<S>
+impl<S> State<(ToReplica, Signature)> for Verify<S>
 where
-    S: State<'m, Message = ToReplica>,
+    S: State<ToReplica>,
 {
-    type Message = (ToReplica, Signature);
-
-    fn update(&mut self, message: Self::Message) {
+    fn update(&mut self, message: (ToReplica, Signature)) {
         let (message, signature) = message;
         if self.keys[replica_id(&message, self.keys.len()) as usize]
             .verify(&bincode::options().serialize(&message).unwrap(), &signature)
@@ -67,11 +65,10 @@ impl Sign {
     }
 }
 
-impl FunctionalState<'_> for Sign {
-    type Input = ToReplica;
+impl FunctionalState<ToReplica> for Sign {
     type Output<'output> = (ToReplica, Signature) where Self: 'output;
 
-    fn update(&mut self, input: Self::Input) -> Self::Output<'_> {
+    fn update(&mut self, input: ToReplica) -> Self::Output<'_> {
         let signature = self
             .key
             .sign(&bincode::options().serialize(&input).unwrap());

@@ -7,7 +7,7 @@ use std::collections::HashMap;
 
 use bincode::Options;
 use neat_core::{
-    actor,
+    actor::State,
     app::{self, FunctionalState},
     timeout::{
         self,
@@ -45,14 +45,13 @@ impl<A> App<A> {
     }
 }
 
-impl<'o, A> app::FunctionalState<'o> for App<A>
+impl<A> app::FunctionalState<Upcall<'_>> for App<A>
 where
     A: neat_core::App + 'static,
 {
-    type Input = Upcall<'o>;
     type Output<'a> = Option<(u32, Reply)>;
 
-    fn update(&mut self, input: Self::Input) -> Self::Output<'_> {
+    fn update(&mut self, input: Upcall<'_>) -> Self::Output<'_> {
         match self.replies.get(&input.client_id) {
             Some(reply) if reply.request_num > input.request_num => return None,
             Some(reply) if reply.request_num == input.request_num => {
@@ -172,15 +171,13 @@ impl<U, E, T> Replica<U, E, T> {
     }
 }
 
-impl<U, E, T> actor::State<'_> for Replica<U, E, T>
+impl<U, E, T> State<ToReplica> for Replica<U, E, T>
 where
-    U: for<'m> actor::State<'m, Message = Upcall<'m>>,
-    E: for<'m> actor::State<'m, Message = Egress<ToReplica>>,
-    T: for<'m> actor::State<'m, Message = timeout::Message<Timeout>>,
+    U: for<'m> State<Upcall<'m>>,
+    E: State<Egress<ToReplica>>,
+    T: State<timeout::Message<Timeout>>,
 {
-    type Message = ToReplica;
-
-    fn update(&mut self, message: Self::Message) {
+    fn update(&mut self, message: ToReplica) {
         match message {
             ToReplica::Request(message) => self.handle_request(message),
             ToReplica::PrePrepare(message, requests) => self.handle_pre_prepare(message, requests),
@@ -258,9 +255,9 @@ fn digest(requests: &[Request]) -> [u8; 32] {
 
 impl<U, E, T> Replica<U, E, T>
 where
-    U: for<'m> actor::State<'m, Message = Upcall<'m>>,
-    E: for<'m> actor::State<'m, Message = Egress<ToReplica>>,
-    T: for<'m> actor::State<'m, Message = timeout::Message<Timeout>>,
+    U: for<'m> State<Upcall<'m>>,
+    E: State<Egress<ToReplica>>,
+    T: State<timeout::Message<Timeout>>,
 {
     fn handle_request(&mut self, message: Request) {
         if self.id != self.primary_id() {
@@ -474,14 +471,13 @@ where
 
 pub struct EgressLift<S>(pub S);
 
-impl<'m, S> FunctionalState<'m> for EgressLift<S>
+impl<M, S> FunctionalState<Egress<M>> for EgressLift<S>
 where
-    S: FunctionalState<'m>,
+    S: FunctionalState<M>,
 {
-    type Input = Egress<S::Input>;
     type Output<'output> = Egress<S::Output<'output>> where Self: 'output;
 
-    fn update(&mut self, input: Self::Input) -> Self::Output<'_> {
+    fn update(&mut self, input: Egress<M>) -> Self::Output<'_> {
         match input {
             Egress::To(id, message) => Egress::To(id, self.0.update(message)),
             Egress::ToAll(message) => Egress::ToAll(self.0.update(message)),

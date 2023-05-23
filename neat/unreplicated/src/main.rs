@@ -36,13 +36,11 @@ struct Workload<I> {
     invoke: I,
 }
 
-impl<I> State<'_> for Workload<I>
+impl<I> State<client::Result> for Workload<I>
 where
-    I: for<'m> State<'m, Message = client::Message>,
+    I: State<client::Message>,
 {
-    type Message = client::Result;
-
-    fn update(&mut self, message: Self::Message) {
+    fn update(&mut self, message: client::Result) {
         assert_eq!(
             message,
             neat_unreplicated::client::Result(Default::default())
