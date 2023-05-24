@@ -7,11 +7,10 @@ use clap::Parser;
 use neat_barrier::{provide_barrier, use_barrier};
 use neat_bincode::{de, ser};
 use neat_core::{
-    actor::{Drive, State, Wire},
     app::{Closure, FunctionalState},
     message::TransportLift,
     route::ClientTable,
-    App, Dispatch, Lift,
+    App, Dispatch, Lift, {Drive, State, Wire},
 };
 use neat_unreplicated::{client, AppLift, Client, Replica};
 use rand::{rngs::StdRng, SeedableRng};

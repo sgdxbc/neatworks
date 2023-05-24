@@ -7,13 +7,12 @@ use clap::Parser;
 use neat_barrier::{provide_barrier, use_barrier};
 use neat_bincode::{de, ser};
 use neat_core::{
-    actor::{Drive, State, Wire},
     app::{Closure, FunctionalState},
     message::{Egress, EgressLift, Transport, TransportLift},
     route::{ClientTable, ReplicaTable},
-    App, Dispatch, Lift,
+    App, Dispatch, Lift, {Drive, State, Wire},
 };
-use neat_pbft::{client, Replica, Sign, Verify};
+use neat_pbft::{client, Client, Replica, Sign, Verify};
 use rand::{rngs::StdRng, SeedableRng};
 use serde::{Deserialize, Serialize};
 use tokio::{
@@ -94,7 +93,7 @@ async fn run_clients(cli: Cli, route: ClientTable, replica_route: ReplicaTable) 
         let egress = neat_udp::Out::bind(client_addr).await;
         let mut ingress = neat_udp::In::new(
             &egress,
-            // Closure::from(|(_, message)| message).install(
+            // Closure(|(_, message)| message).install(
             //     de()
             Lift(de(), TransportLift).install(
                 Closure(|(_, message)| message)
@@ -106,7 +105,7 @@ async fn run_clients(cli: Cli, route: ClientTable, replica_route: ReplicaTable) 
             outstanding_start: Instant::now(),
             invoke: client_wire.state(),
         };
-        let mut client = neat_pbft::Client::new(
+        let mut client = Client::new(
             client_id,
             cli.faulty_count,
             ser().install(Closure(Egress::ToAll).install(EgressRoute {

@@ -3,7 +3,9 @@ pub mod app;
 pub mod dispatch;
 pub mod message;
 pub mod route;
+pub mod wire;
 
 pub use actor::State;
 pub use app::{App, FunctionalState, Lift};
 pub use dispatch::Dispatch;
+pub use wire::{Drive, Wire};

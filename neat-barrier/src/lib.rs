@@ -5,10 +5,9 @@ use std::{
 
 use neat_bincode::{de, ser};
 use neat_core::{
-    actor::{Drive, State, Wire},
     app::{Closure, FunctionalState},
     message::{Transport, TransportLift},
-    Dispatch, Lift,
+    Dispatch, Lift, {Drive, State, Wire},
 };
 use serde::{de::DeserializeOwned, Serialize};
 use tokio::spawn;

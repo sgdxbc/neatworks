@@ -3,10 +3,9 @@ use std::{iter::repeat_with, net::SocketAddr};
 use neat_barrier::{Message, Service};
 use neat_bincode::{de, ser};
 use neat_core::{
-    actor::{Drive, Wire},
     app::{Closure, FunctionalState},
     message::TransportLift,
-    Dispatch, Lift, State,
+    Dispatch, Lift, State, {Drive, Wire},
 };
 
 use tokio::spawn;
