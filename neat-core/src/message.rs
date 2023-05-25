@@ -20,6 +20,21 @@ pub use crate::dispatch::Message as Dispatch;
 pub struct DispatchLift;
 // TODO
 
+/// Rich-featured timeout protocol.
+/// 
+/// The message consumer should guarantee that after a timeout is unset, it will
+/// not get received. It should also try it best to guarantee that after a
+/// timeout is reset, it should be delievered at the delayed deadline instead of
+/// the previous one.
+/// 
+/// The message producer should guarantee that for each timeout value, i.e.
+/// instance of type `T`, the message order must be one `Set(T)`, followed by
+/// zero or more `Reset(T)`, followed by zero or one `Unset(T)`. There must not
+/// be any other ordering other invalid message sequence e.g. multiple `Unset`.
+/// 
+/// The contract is relatively complicated (makes it hard to be encoded into 
+/// type checking) and error-prone, so consider use tick-based timeout when it
+/// is capatible.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum Timeout<T> {
     Set(T),

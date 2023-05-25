@@ -159,10 +159,11 @@ async fn run_clients(cli: Cli, route: ClientTable, replica_route: ReplicaTable) 
 }
 
 async fn run_replica(cli: Cli, route: ClientTable, replica_route: ReplicaTable) {
+    let replica_wire = Wire::default();
+    let timeout_wire = Wire::default();
+
     let replica_id = cli.replica_id.unwrap();
     let replica_addr = replica_route.lookup_addr(replica_id);
-    let replica_wire = Wire::default();
-
     let egress = neat_udp::Out::bind(replica_addr).await;
 
     let app = Null
@@ -172,10 +173,7 @@ async fn run_replica(cli: Cli, route: ClientTable, replica_route: ReplicaTable) 
                 .install(Lift(ser(), TransportLift).install(egress.clone())),
         );
 
-    // TODO
-    let replica_wire2 = Wire::default();
-    let (mut waker, control) = neat_time::new(replica_wire2.state());
-
+    let (mut waker, control) = neat_time::new(timeout_wire.state());
     let mut replica = Replica::new(
         replica_id,
         replica_route.len(),
@@ -188,7 +186,7 @@ async fn run_replica(cli: Cli, route: ClientTable, replica_route: ReplicaTable) 
                 addr: replica_addr,
                 state: egress.clone(),
             })),
-        control.install(Dispatch::default()),
+        control.install(timeout_wire.state()),
     );
 
     let mut ingress = neat_udp::In::new(
@@ -199,16 +197,20 @@ async fn run_replica(cli: Cli, route: ClientTable, replica_route: ReplicaTable) 
         ),
     );
     let ingress = spawn(async move { ingress.start().await });
-    let waker = spawn(async move { waker.start().await });
+    let mut timeout = Drive::from(timeout_wire);
+    let timeout = spawn(async move { timeout.run(Dispatch::default()).await });
 
     let mut drive = Drive::from(replica_wire);
-    select! {
-        _ = drive.run(&mut replica) => unreachable!(),
-        result = ctrl_c() => result.unwrap(),
+    loop {
+        select! {
+            message = drive.recv() => replica.update(message.unwrap()),
+            timeout = waker.recv() => replica.update(timeout.unwrap()),
+            result = ctrl_c() => break result.unwrap(),
+        }
     }
 
     ingress.abort();
-    waker.abort();
+    timeout.abort();
     // print some stats if needed
     let _replica = replica;
 }

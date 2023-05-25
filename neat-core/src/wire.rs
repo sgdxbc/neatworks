@@ -20,6 +20,7 @@ impl<M> SharedClone for WireState<M> {}
 
 impl<M> State<M> for WireState<M> {
     fn update(&mut self, message: M) {
+        // assert send.0 is unbounded
         if self.0.send(message).is_err() {
             //
         }
@@ -34,7 +35,7 @@ impl<M> Default for Wire<M> {
 }
 
 #[derive(Debug)]
-pub struct Drive<M>(Receiver<M>);
+pub struct Drive<M>(pub Receiver<M>);
 
 impl<M> From<Wire<M>> for Drive<M> {
     fn from(value: Wire<M>) -> Self {
