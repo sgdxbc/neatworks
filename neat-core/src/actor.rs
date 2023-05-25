@@ -1,4 +1,3 @@
-
 pub trait State<Message> {
     fn update(&mut self, message: Message);
 

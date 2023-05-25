@@ -60,8 +60,8 @@ fn server_config() -> ServerConfig {
         .unwrap()
 }
 
-pub type Connection<S, D> = neat_tcp::GeneralConnection<S, D, TlsStream<TcpStream>>;
-pub type ConnectionOut = neat_tcp::ConnectionOut;
+pub type Connection<S, D> = crate::tcp::GeneralConnection<S, D, TlsStream<TcpStream>>;
+pub type ConnectionOut = crate::tcp::ConnectionOut;
 
 #[derive(Clone)]
 pub struct Connector(pub TlsConnector);
@@ -75,7 +75,7 @@ impl Default for Connector {
 impl Connector {
     pub async fn upgrade_client<S, D>(
         &self,
-        connection: neat_tcp::Connection<S, D>,
+        connection: crate::tcp::Connection<S, D>,
     ) -> Connection<S, D> {
         let (connection, stream) = connection.replace_stream(());
         let stream = self
@@ -102,7 +102,7 @@ impl Default for Acceptor {
 impl Acceptor {
     pub async fn upgrade_server<S, D>(
         &self,
-        connection: neat_tcp::Connection<S, D>,
+        connection: crate::tcp::Connection<S, D>,
     ) -> Connection<S, D> {
         let (connection, stream) = connection.replace_stream(());
         let stream = self.0.accept(stream.into_inner()).await.unwrap();

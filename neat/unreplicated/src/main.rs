@@ -4,7 +4,6 @@ use std::{
 };
 
 use clap::Parser;
-use neat_barrier::{provide_barrier, use_barrier};
 use neat_bincode::{de, ser};
 use neat_core::{
     app::{Closure, FunctionalState},
@@ -12,6 +11,7 @@ use neat_core::{
     route::ClientTable,
     App, Dispatch, Lift, {Drive, State, Wire},
 };
+use neat_tokio::barrier::{provide_barrier, use_barrier};
 use neat_unreplicated::{client, AppLift, Client, Replica};
 use rand::{rngs::StdRng, SeedableRng};
 use serde::{Deserialize, Serialize};
@@ -63,8 +63,8 @@ async fn run_clients_udp(cli: Cli, route: ClientTable, replica_addr: SocketAddr)
         let client_id = route.identity(index);
         let client_addr = route.lookup_addr(client_id);
         let client_wire = Wire::default();
-        let egress = neat_udp::Out::bind(client_addr).await;
-        let mut ingress = neat_udp::In::new(
+        let egress = neat_tokio::udp::Out::bind(client_addr).await;
+        let mut ingress = neat_tokio::udp::In::new(
             &egress,
             Lift(de(), TransportLift).install(
                 Closure(|(_, message)| Message::Handle(message)).install(client_wire.state()),
@@ -125,7 +125,7 @@ async fn run_clients_udp(cli: Cli, route: ClientTable, replica_addr: SocketAddr)
 }
 
 async fn run_replica_udp(_cli: Cli, route: ClientTable, replica_addr: SocketAddr) {
-    let egress = neat_udp::Out::bind(replica_addr).await;
+    let egress = neat_tokio::udp::Out::bind(replica_addr).await;
 
     let app = Null.lift(AppLift::default()).install_filtered(
         Closure(move |(id, message)| (route.lookup_addr(id), message))
@@ -133,7 +133,7 @@ async fn run_replica_udp(_cli: Cli, route: ClientTable, replica_addr: SocketAddr
     );
     let mut replica = Replica::new(app);
 
-    let mut ingress = neat_udp::In::new(
+    let mut ingress = neat_tokio::udp::In::new(
         &egress,
         Lift(de(), TransportLift).install(Closure(|(_, message)| message).install(&mut replica)),
     );
@@ -157,7 +157,7 @@ async fn run_clients_tcp(cli: Cli, route: ClientTable, replica_addr: SocketAddr)
         let client_addr = route.lookup_addr(client_id);
         let client_wire = Wire::default();
 
-        let mut connection = neat_tcp::Connection::connect(
+        let mut connection = neat_tokio::tcp::Connection::connect(
             client_addr,
             replica_addr,
             Lift(de(), TransportLift).install(
@@ -227,7 +227,7 @@ async fn run_replica_tcp(_cli: Cli, route: ClientTable, replica_addr: SocketAddr
     let replica_wire = Wire::default();
     let disconnected = Wire::default();
 
-    let listener = neat_tcp::Listener::bind(replica_addr);
+    let listener = neat_tokio::tcp::Listener::bind(replica_addr);
     let mut dispatch = Dispatch::default();
     for _ in 0..route.len() {
         let mut connection = listener
@@ -267,7 +267,7 @@ async fn run_clients_tls(cli: Cli, route: ClientTable, replica_addr: SocketAddr)
         let client_addr = route.lookup_addr(client_id);
         let client_wire = Wire::default();
 
-        let connection = neat_tcp::Connection::connect(
+        let connection = neat_tokio::tcp::Connection::connect(
             client_addr,
             replica_addr,
             Lift(de(), TransportLift).install(
@@ -276,7 +276,7 @@ async fn run_clients_tls(cli: Cli, route: ClientTable, replica_addr: SocketAddr)
             Wire::default().state(),
         )
         .await;
-        let mut connection = neat_tls::Connector::default()
+        let mut connection = neat_tokio::tls::Connector::default()
             .upgrade_client(connection)
             .await;
         let mut dispatch = Dispatch::default();
@@ -340,8 +340,8 @@ async fn run_replica_tls(_cli: Cli, route: ClientTable, replica_addr: SocketAddr
     let replica_wire = Wire::default();
     let disconnected = Wire::default();
 
-    let listener = neat_tcp::Listener::bind(replica_addr);
-    let acceptor = neat_tls::Acceptor::default();
+    let listener = neat_tokio::tcp::Listener::bind(replica_addr);
+    let acceptor = neat_tokio::tls::Acceptor::default();
     let mut dispatch = Dispatch::default();
     for _ in 0..route.len() {
         let connection = listener

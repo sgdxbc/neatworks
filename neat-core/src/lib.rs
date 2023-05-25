@@ -1,5 +1,6 @@
 pub mod actor;
 pub mod app;
+pub mod barrier;
 pub mod dispatch;
 pub mod message;
 pub mod route;

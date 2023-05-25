@@ -4,7 +4,6 @@ use std::{
 };
 
 use clap::Parser;
-use neat_barrier::{provide_barrier, use_barrier};
 use neat_bincode::{de, ser};
 use neat_core::{
     app::{Closure, FunctionalState},
@@ -13,6 +12,7 @@ use neat_core::{
     App, Dispatch, Lift, {Drive, State, Wire},
 };
 use neat_pbft::{client, Client, Replica, Sign, Verify};
+use neat_tokio::barrier::{provide_barrier, use_barrier};
 use rand::{rngs::StdRng, SeedableRng};
 use serde::{Deserialize, Serialize};
 use tokio::{
@@ -90,8 +90,8 @@ async fn run_clients(cli: Cli, route: ClientTable, replica_route: ReplicaTable) 
         let client_id = route.identity(index);
         let client_addr = route.lookup_addr(client_id);
         let client_wire = Wire::default();
-        let egress = neat_udp::Out::bind(client_addr).await;
-        let mut ingress = neat_udp::In::new(
+        let egress = neat_tokio::udp::Out::bind(client_addr).await;
+        let mut ingress = neat_tokio::udp::In::new(
             &egress,
             // Closure(|(_, message)| message).install(
             //     de()
@@ -164,7 +164,7 @@ async fn run_replica(cli: Cli, route: ClientTable, replica_route: ReplicaTable) 
 
     let replica_id = cli.replica_id.unwrap();
     let replica_addr = replica_route.lookup_addr(replica_id);
-    let egress = neat_udp::Out::bind(replica_addr).await;
+    let egress = neat_tokio::udp::Out::bind(replica_addr).await;
 
     let app = Null
         .lift(neat_pbft::AppLift::new(replica_id))
@@ -173,7 +173,7 @@ async fn run_replica(cli: Cli, route: ClientTable, replica_route: ReplicaTable) 
                 .install(Lift(ser(), TransportLift).install(egress.clone())),
         );
 
-    let (mut waker, control) = neat_time::new(timeout_wire.state());
+    let (mut waker, control) = neat_tokio::time::new(timeout_wire.state());
     let mut replica = Replica::new(
         replica_id,
         replica_route.len(),
@@ -189,7 +189,7 @@ async fn run_replica(cli: Cli, route: ClientTable, replica_route: ReplicaTable) 
         control.install(timeout_wire.state()),
     );
 
-    let mut ingress = neat_udp::In::new(
+    let mut ingress = neat_tokio::udp::In::new(
         &egress,
         Lift(de(), TransportLift).install(
             Closure(|(_, message)| message)

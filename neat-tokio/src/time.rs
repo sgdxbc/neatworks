@@ -130,7 +130,7 @@ where
                 timeout.clone(),
                 Sleeper::spawn(Default::default(), self.0.clone(), timeout),
             ),
-            Reset(timeout) => Update(timeout, crate::Reset),
+            Reset(timeout) => Update(timeout, crate::time::Reset),
             Unset(timeout) => Remove(timeout),
         }
     }
