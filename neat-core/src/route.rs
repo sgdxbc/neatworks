@@ -23,6 +23,7 @@ impl ClientTable {
     }
 
     pub fn addr(&self, index: usize) -> SocketAddr {
+        assert!(index < 10000);
         let (&base_index, &host) = self.hosts.range(..=index).last().unwrap();
         SocketAddr::from((host, 50000 + (index - base_index) as u16))
     }
@@ -47,7 +48,7 @@ impl ClientTable {
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct ReplicaTable {
     identities: Vec<[u8; 32]>,
-    routes: Vec<SocketAddr>,
+    routes: Vec<IpAddr>,
 }
 
 impl ReplicaTable {
@@ -59,18 +60,22 @@ impl ReplicaTable {
         self.identities.is_empty()
     }
 
-    pub fn add(&mut self, addr: SocketAddr, mut rng: impl Rng) {
+    pub fn add(&mut self, host: IpAddr, mut rng: impl Rng) {
         let index = self.len();
         self.identities.push(rng.gen());
-        self.routes.insert(index as _, addr);
+        self.routes.insert(index as _, host);
     }
 
     pub fn identity(&self, id: u8) -> [u8; 32] {
         self.identities[id as usize]
     }
 
-    pub fn lookup_addr(&self, id: u8) -> SocketAddr {
-        self.routes[id as usize]
+    pub fn public_addr(&self, id: u8) -> SocketAddr {
+        SocketAddr::new(self.routes[id as usize], 60001)
+    }
+
+    pub fn internal_addr(&self, id: u8) -> SocketAddr {
+        SocketAddr::new(self.routes[id as usize], 60002)
     }
 }
 

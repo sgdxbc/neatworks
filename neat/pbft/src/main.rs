@@ -11,8 +11,11 @@ use neat_core::{
     route::{ClientTable, ReplicaTable},
     App, Dispatch, Lift, {Drive, State, Wire},
 };
-use neat_pbft::{client, Client, Replica, Sign, Verify};
-use neat_tokio::barrier::{provide_barrier, use_barrier};
+use neat_pbft::{client, Client, Replica, Sign, ToReplica, Verify};
+use neat_tokio::{
+    barrier::{provide_barrier, use_barrier},
+    udp,
+};
 use rand::{rngs::StdRng, SeedableRng};
 use serde::{Deserialize, Serialize};
 use tokio::{
@@ -50,30 +53,60 @@ where
     }
 }
 
-struct EgressRoute<S> {
+struct EgressRoute<R, S> {
+    strategy: R,
     route: ReplicaTable,
-    addr: SocketAddr,
     state: S,
 }
 
-impl<S> State<Egress<u8, Vec<u8>>> for EgressRoute<S>
+trait RouteStrategy {
+    fn lookup_addr(route: &ReplicaTable, id: u8) -> SocketAddr;
+    fn is_exclude(&self, id: u8) -> bool;
+}
+
+struct ClientEgress;
+
+impl RouteStrategy for ClientEgress {
+    fn lookup_addr(route: &ReplicaTable, id: u8) -> SocketAddr {
+        route.public_addr(id)
+    }
+
+    fn is_exclude(&self, _: u8) -> bool {
+        false
+    }
+}
+
+struct ReplicaEgress(u8);
+
+impl RouteStrategy for ReplicaEgress {
+    fn lookup_addr(route: &ReplicaTable, id: u8) -> SocketAddr {
+        route.internal_addr(id)
+    }
+
+    fn is_exclude(&self, id: u8) -> bool {
+        id == self.0
+    }
+}
+
+impl<R, S> State<Egress<u8, Vec<u8>>> for EgressRoute<R, S>
 where
+    R: RouteStrategy,
     S: State<Transport<Vec<u8>>>,
 {
     fn update(&mut self, message: Egress<u8, Vec<u8>>) {
         match message {
             Egress::To(replica_id, message) => {
-                let addr = self.route.lookup_addr(replica_id);
-                assert_ne!(addr, self.addr);
+                assert!(!self.strategy.is_exclude(replica_id));
+                let addr = R::lookup_addr(&self.route, replica_id);
                 self.state.update((addr, message))
             }
             Egress::ToAll(message) => {
                 for id in 0..self.route.len() as u8 {
-                    let addr = self.route.lookup_addr(id);
-                    if addr == self.addr {
+                    if self.strategy.is_exclude(id) {
                         continue;
                     }
-                    self.state.update((addr, message.clone()))
+                    self.state
+                        .update((R::lookup_addr(&self.route, id), message.clone()))
                 }
             }
         }
@@ -90,8 +123,8 @@ async fn run_clients(cli: Cli, route: ClientTable, replica_route: ReplicaTable) 
         let client_id = route.identity(index);
         let client_addr = route.lookup_addr(client_id);
         let client_wire = Wire::default();
-        let egress = neat_tokio::udp::Out::bind(client_addr).await;
-        let mut ingress = neat_tokio::udp::In::new(
+        let egress = udp::Out::bind(client_addr).await;
+        let mut ingress = udp::In::new(
             &egress,
             // Closure(|(_, message)| message).install(
             //     de()
@@ -109,8 +142,8 @@ async fn run_clients(cli: Cli, route: ClientTable, replica_route: ReplicaTable) 
             client_id,
             cli.faulty_count,
             ser().install(Closure(Egress::ToAll).install(EgressRoute {
+                strategy: ClientEgress,
                 route: replica_route.clone(),
-                addr: client_addr,
                 state: egress,
             })),
             workload,
@@ -163,14 +196,14 @@ async fn run_replica(cli: Cli, route: ClientTable, replica_route: ReplicaTable) 
     let timeout_wire = Wire::default();
 
     let replica_id = cli.replica_id.unwrap();
-    let replica_addr = replica_route.lookup_addr(replica_id);
-    let egress = neat_tokio::udp::Out::bind(replica_addr).await;
+    let client_egress = udp::Out::bind(replica_route.public_addr(replica_id)).await;
+    let egress = udp::Out::bind(replica_route.internal_addr(replica_id)).await;
 
     let app = Null
         .lift(neat_pbft::AppLift::new(replica_id))
         .install_filtered(
             Closure(move |(id, message)| (route.lookup_addr(id), message))
-                .install(Lift(ser(), TransportLift).install(egress.clone())),
+                .install(Lift(ser(), TransportLift).install(client_egress.clone())),
         );
 
     let (mut waker, control) = neat_tokio::time::new(timeout_wire.state());
@@ -182,14 +215,21 @@ async fn run_replica(cli: Cli, route: ClientTable, replica_route: ReplicaTable) 
         Sign::new(&replica_route, replica_id)
             .lift_default::<EgressLift<_>>()
             .install(ser().lift_default::<EgressLift<_>>().install(EgressRoute {
+                strategy: ReplicaEgress(replica_id),
                 route: replica_route.clone(),
-                addr: replica_addr,
                 state: egress.clone(),
             })),
         control.install(timeout_wire.state()),
     );
 
-    let mut ingress = neat_tokio::udp::In::new(
+    let mut client_ingress = udp::In::new(
+        &client_egress,
+        Lift(de(), TransportLift).install(
+            Closure(|(_, message)| ToReplica::Request(message)).install(replica_wire.state()),
+        ),
+    );
+    let client_ingress = spawn(async move { client_ingress.start().await });
+    let mut ingress = udp::In::new(
         &egress,
         Lift(de(), TransportLift).install(
             Closure(|(_, message)| message)
@@ -209,6 +249,7 @@ async fn run_replica(cli: Cli, route: ClientTable, replica_route: ReplicaTable) 
         }
     }
 
+    client_ingress.abort();
     ingress.abort();
     timeout.abort();
     // print some stats if needed
@@ -223,6 +264,9 @@ enum BarrierUser {
 
 #[derive(Parser)]
 struct Cli {
+    #[clap(long)]
+    local: bool,
+
     #[clap(long, default_value_t = 0)]
     barrier_count: usize,
     #[clap(long)]
@@ -257,7 +301,10 @@ async fn main() {
         _ => unimplemented!(),
     };
     let mut users = use_barrier(
-        SocketAddr::from(([0, 0, 0, 0], 0)),
+        match user {
+            BarrierUser::Replica(id) if cli.local => SocketAddr::from(([127, 0, 0, 100 + id], 0)),
+            _ => SocketAddr::from(([0, 0, 0, 0], 0)),
+        },
         SocketAddr::from((cli.barrier_host.unwrap(), 60000)),
         user,
     )
@@ -271,7 +318,7 @@ async fn main() {
         match user {
             (BarrierUser::Replica(id), host) => {
                 assert_eq!(id as usize, replica_route.len());
-                replica_route.add(SocketAddr::new(host, 0), &mut rng);
+                replica_route.add(host, &mut rng);
             }
             (BarrierUser::Client(index, count), host) => {
                 assert_eq!(index, route.len());

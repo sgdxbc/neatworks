@@ -128,7 +128,8 @@ where
         match input {
             Set(timeout) => Insert(
                 timeout.clone(),
-                Sleeper::spawn(Default::default(), self.0.clone(), timeout),
+                // TODO
+                Sleeper::spawn(Duration::from_millis(100), self.0.clone(), timeout),
             ),
             Reset(timeout) => Update(timeout, crate::time::Reset),
             Unset(timeout) => Remove(timeout),

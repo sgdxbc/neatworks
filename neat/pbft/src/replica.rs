@@ -181,7 +181,7 @@ where
     T: State<Timeout>,
 {
     fn update(&mut self, message: TimeoutEvent) {
-        match message {
+        match dbg!(message) {
             TimeoutEvent::Prepare(view_num, op_num) => {
                 assert_eq!(self.view_num, view_num);
                 assert!(self.prepared_slot(op_num).is_none());
@@ -346,8 +346,10 @@ where
             self.view_num = message.view_num;
         }
         if self.prepared_slot(message.op_num).is_some() {
-            // dedicated reply to late sender
-            self.send_prepare(message.op_num, Egress::to(message.replica_id));
+            if self.id != self.primary_id() {
+                // dedicated reply to late sender
+                self.send_prepare(message.op_num, Egress::to(message.replica_id));
+            }
             return;
         }
         if let Some((pre_prepare, _)) = self.pre_prepares.get(&message.op_num) {
@@ -449,7 +451,10 @@ where
         while let Some(requests) = self.committed_slot(self.execute_number + 1) {
             // alternative: move `requests` from `pre_prepares` to `log`
             let requests = requests.to_vec();
+
             self.log.push(requests.clone());
+            self.execute_number += 1;
+
             for request in requests {
                 let upcall = Upcall {
                     view_num: self.view_num,
@@ -460,7 +465,6 @@ where
                 };
                 self.upcall.update(upcall);
             }
-            self.execute_number += 1;
         }
     }
 }
