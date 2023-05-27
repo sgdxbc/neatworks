@@ -237,11 +237,13 @@ async fn run_replica(cli: Cli, route: ClientTable, replica_route: ReplicaTable) 
     let ingress = spawn(async move { ingress.start().await });
 
     let mut drive = Drive::from(replica_wire);
+    let shutdown = ctrl_c();
+    tokio::pin!(shutdown);
     loop {
         select! {
             message = drive.recv() => replica.update(message.expect("no active shutdown")),
             timeout = replica.timeout.recv() => replica.update(timeout),
-            result = ctrl_c() => break result.unwrap(),
+            result = &mut shutdown => break result.unwrap(),
         }
     }
 

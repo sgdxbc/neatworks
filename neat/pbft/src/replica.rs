@@ -3,6 +3,7 @@
 // for certain proposal (as defined in paper), and a demand indicator.
 // That is, (re)sending `(Pre)Prepare` also means sender is querying `Prepare`,
 // and (re)sending `Commit` also means sender is querying `Commit`.
+// NOTE: disabled tentatively because this strategy causes infinite resending
 use std::collections::HashMap;
 
 use bincode::Options;
@@ -314,7 +315,7 @@ where
         }
         if self.pre_prepares.contains_key(&message.op_num) {
             // dedicated reply to late sender
-            self.send_prepare(message.op_num, Egress::to(self.primary_id()));
+            // self.send_prepare(message.op_num, Egress::to(self.primary_id()));
             return;
         }
         // TODO watermark
@@ -348,7 +349,7 @@ where
         if self.prepared_slot(message.op_num).is_some() {
             if self.id != self.primary_id() {
                 // dedicated reply to late sender
-                self.send_prepare(message.op_num, Egress::to(message.replica_id));
+                // self.send_prepare(message.op_num, Egress::to(message.replica_id));
             }
             return;
         }
@@ -372,7 +373,7 @@ where
         }
         if self.committed_slot(message.op_num).is_some() {
             // dedicated reply to late sender
-            self.send_commit(message.op_num, Egress::to(message.replica_id));
+            // self.send_commit(message.op_num, Egress::to(message.replica_id));
             return;
         }
         if let Some((pre_prepare, _)) = self.pre_prepares.get(&message.op_num) {
@@ -452,19 +453,19 @@ where
             // alternative: move `requests` from `pre_prepares` to `log`
             let requests = requests.to_vec();
 
-            self.log.push(requests.clone());
-            self.execute_number += 1;
-
-            for request in requests {
+            for request in &requests {
                 let upcall = Upcall {
                     view_num: self.view_num,
-                    op_num: self.execute_number,
+                    op_num: self.execute_number + 1,
                     client_id: request.client_id,
                     request_num: request.request_num,
                     op: &request.op,
                 };
                 self.upcall.update(upcall);
             }
+
+            self.log.push(requests);
+            self.execute_number += 1;
         }
     }
 }
