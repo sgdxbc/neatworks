@@ -1,34 +1,26 @@
-use std::{marker::PhantomData, time::Duration};
+use std::{collections::HashMap, hash::Hash, marker::PhantomData, time::Duration};
 
-use neat_core::{
-    actor::State,
-    app::FunctionalState,
-    message::{Dispatch, Timeout},
-};
+use neat_core::{message::Timeout, State};
 use tokio::{
     select, spawn,
+    sync::mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender},
     task::JoinHandle,
     time::{sleep, Instant},
 };
 
-// Unset semantic is only guaranteed when message passing is fully synchronous
-// that is, both `Sleeper` and (`Control`-installed) `Dispatch` must be directly
-// embedded instead of `Drive`ed.
-// in the future maybe a marker trait should be added to encode this requirement
-
 #[derive(Debug)]
 pub struct Sleeper<T> {
-    reset: flume::Sender<()>,
+    reset: UnboundedSender<()>,
     task: JoinHandle<()>,
     _timeout: PhantomData<T>,
 }
 
 impl<T> Sleeper<T> {
-    fn spawn(duration: Duration, wake: flume::Sender<T>, timeout: T) -> Self
+    fn spawn(duration: Duration, wake: UnboundedSender<T>, timeout: T) -> Self
     where
         T: Send + 'static,
     {
-        let reset = flume::unbounded();
+        let reset = unbounded_channel();
         Self {
             reset: reset.0,
             task: spawn(Self::run(duration, reset.1, wake, timeout)),
@@ -38,8 +30,8 @@ impl<T> Sleeper<T> {
 
     async fn run(
         duration: Duration,
-        reset: flume::Receiver<()>,
-        wake: flume::Sender<T>,
+        mut reset: UnboundedReceiver<()>,
+        wake: UnboundedSender<T>,
         timeout: T,
     ) {
         let sleep = sleep(duration);
@@ -47,17 +39,14 @@ impl<T> Sleeper<T> {
         loop {
             select! {
                 _ = &mut sleep => break,
-                result = reset.recv_async() => if result.is_ok() {
+                result = reset.recv() => if result.is_some() {
                     sleep.as_mut().reset(Instant::now() + duration);
                 } else {
                     return; // unset timeout cause `reset` sender get dropped
                 }
             }
         }
-        // any further reset is ignored, which should be fine
-        // a rendezvous `wake` channel is used to ensure that unset timeout is
-        // never waked, hope it works as i expect
-        if wake.send_async(timeout).await.is_err() {
+        if wake.send(timeout).is_err() {
             //
         }
     }
@@ -79,60 +68,63 @@ impl<T> State<Reset> for Sleeper<T> {
     }
 }
 
-#[derive(Debug, Clone)]
-pub struct Waker<T, D> {
-    wake: flume::Receiver<T>,
-    // alternative: decouple with `dispatch`, ask user to `Inspect` timeout and
-    // do removal by themselves
-    // sounds like unnecessary exposure of internal details
-    pub dispatch: D,
+#[derive(Debug)]
+pub struct Control<T> {
+    wake: (UnboundedSender<T>, UnboundedReceiver<T>),
+    sleepers: HashMap<T, Sleeper<T>>,
 }
 
-impl<T, D> Waker<T, D> {
-    pub async fn recv<S, M>(&mut self) -> Option<T>
-    where
-        D: State<Dispatch<T, S, M>>,
-        T: Clone,
-    {
-        if let Ok(timeout) = self.wake.recv_async().await {
-            self.dispatch.update(Dispatch::Remove(timeout.clone()));
-            Some(timeout)
-        } else {
-            None
+impl<T> Default for Control<T> {
+    fn default() -> Self {
+        Self {
+            wake: unbounded_channel(),
+            sleepers: Default::default(),
         }
     }
 }
 
-#[derive(Debug, Clone)]
-pub struct Control<T>(flume::Sender<T>);
-
-pub fn new<T, D>(dispatch: D) -> (Waker<T, D>, Control<T>) {
-    let wake = flume::bounded(0);
-    (
-        Waker {
-            wake: wake.1,
-            dispatch,
-        },
-        Control(wake.0),
-    )
+impl<T> State<Timeout<T>> for Control<T>
+where
+    T: Hash + Eq + Clone + Send + 'static,
+{
+    // TODO better mistake detection
+    fn update(&mut self, message: Timeout<T>) {
+        use Timeout::*;
+        match message {
+            Set(timeout) => {
+                self.sleepers.insert(
+                    timeout.clone(),
+                    // TODO
+                    Sleeper::spawn(Duration::from_millis(100), self.wake.0.clone(), timeout),
+                );
+            }
+            Reset(timeout) => {
+                if let Some(sleeper) = self.sleepers.get_mut(&timeout) {
+                    sleeper.update(crate::time::Reset)
+                }
+            }
+            Unset(timeout) => {
+                self.sleepers.remove(&timeout);
+            }
+        }
+    }
 }
 
-impl<T> FunctionalState<Timeout<T>> for Control<T>
-where
-    T: Clone + Send + 'static,
-{
-    type Output<'output> = Dispatch<T, Sleeper<T>, Reset> where Self: 'output;
-
-    fn update(&mut self, input: Timeout<T>) -> Self::Output<'_> {
-        use {Dispatch::*, Timeout::*};
-        match input {
-            Set(timeout) => Insert(
-                timeout.clone(),
-                // TODO
-                Sleeper::spawn(Duration::from_millis(100), self.0.clone(), timeout),
-            ),
-            Reset(timeout) => Update(timeout, crate::time::Reset),
-            Unset(timeout) => Remove(timeout),
+impl<T> Control<T> {
+    pub async fn recv(&mut self) -> T
+    where
+        T: Hash + Eq,
+    {
+        loop {
+            let timeout = self
+                .wake
+                .1
+                .recv()
+                .await
+                .expect("control sender not dropped");
+            if self.sleepers.remove(&timeout).is_some() {
+                return timeout;
+            }
         }
     }
 }

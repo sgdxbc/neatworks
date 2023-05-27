@@ -9,7 +9,7 @@ use neat_core::{
     app::{Closure, FunctionalState},
     message::{Egress, EgressLift, Transport, TransportLift},
     route::{ClientTable, ReplicaTable},
-    App, Dispatch, Lift, {Drive, State, Wire},
+    App, Lift, {Drive, State, Wire},
 };
 use neat_pbft::{client, Client, Replica, Sign, ToReplica, Verify};
 use neat_tokio::{
@@ -193,7 +193,6 @@ async fn run_clients(cli: Cli, route: ClientTable, replica_route: ReplicaTable) 
 
 async fn run_replica(cli: Cli, route: ClientTable, replica_route: ReplicaTable) {
     let replica_wire = Wire::default();
-    let timeout_wire = Wire::default();
 
     let replica_id = cli.replica_id.unwrap();
     let client_egress = udp::Out::bind(replica_route.public_addr(replica_id)).await;
@@ -206,7 +205,6 @@ async fn run_replica(cli: Cli, route: ClientTable, replica_route: ReplicaTable) 
                 .install(Lift(ser(), TransportLift).install(client_egress.clone())),
         );
 
-    let (mut waker, control) = neat_tokio::time::new(timeout_wire.state());
     let mut replica = Replica::new(
         replica_id,
         replica_route.len(),
@@ -219,7 +217,7 @@ async fn run_replica(cli: Cli, route: ClientTable, replica_route: ReplicaTable) 
                 route: replica_route.clone(),
                 state: egress.clone(),
             })),
-        control.install(timeout_wire.state()),
+        neat_tokio::time::Control::default(),
     );
 
     let mut client_ingress = udp::In::new(
@@ -237,21 +235,18 @@ async fn run_replica(cli: Cli, route: ClientTable, replica_route: ReplicaTable) 
         ),
     );
     let ingress = spawn(async move { ingress.start().await });
-    let mut timeout = Drive::from(timeout_wire);
-    let timeout = spawn(async move { timeout.run(Dispatch::default()).await });
 
     let mut drive = Drive::from(replica_wire);
     loop {
         select! {
-            message = drive.recv() => replica.update(message.unwrap()),
-            timeout = waker.recv() => replica.update(timeout.unwrap()),
+            message = drive.recv() => replica.update(message.expect("no active shutdown")),
+            timeout = replica.timeout.recv() => replica.update(timeout),
             result = ctrl_c() => break result.unwrap(),
         }
     }
 
     client_ingress.abort();
     ingress.abort();
-    timeout.abort();
     // print some stats if needed
     let _replica = replica;
 }
