@@ -5,6 +5,13 @@ use crate::app::FunctionalState;
 
 pub use crate::app::Message as App;
 
+/// Lifting to allow some part of input "bypass" the functional state and still
+/// get preserved in the output without the state being aware of it.
+///
+/// One common kind of lifting is functor instance i.e. `fmap` in Haskell, which
+/// lift `M -> N` into some `F<M> -> F<N>`. But in general lifting does not
+/// require the input `M` and the output `Self::Out` to have the same
+/// constructor.
 pub trait Lift<S, M> {
     type Out<'output>
     where
@@ -12,6 +19,20 @@ pub trait Lift<S, M> {
         S: 'output;
 
     fn update<'a>(&'a mut self, state: &'a mut S, message: M) -> Self::Out<'a>;
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default)]
+pub struct OptionLift;
+
+impl<S, M> Lift<S, Option<M>> for OptionLift
+where
+    S: FunctionalState<M>,
+{
+    type Out<'o> = Option<S::Output<'o>> where Self: 'o, S: 'o;
+
+    fn update<'a>(&'a mut self, state: &'a mut S, message: Option<M>) -> Self::Out<'a> {
+        message.map(|message| state.update(message))
+    }
 }
 
 pub use crate::dispatch::Message as Dispatch;
