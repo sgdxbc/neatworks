@@ -1,4 +1,14 @@
 ---
+- name: Set fallback value for variables
+  hosts: all
+  gather_facts: False
+
+  tasks:
+  - name: Set fact
+    ansible.builtin.set_fact:
+      client_count: 1
+      work_dir: "/local/cowsay"
+
 - name: Build artifacts
   hosts: localhost
   connection: local
@@ -13,10 +23,6 @@
   gather_facts: False
 
   tasks:
-  - name: Set work directory
-    ansible.builtin.set_fact:
-      work_dir: "/local/cowsay"
-    when: work_dir is undefined
   - name: Synchronize
     ansible.posix.synchronize:
       src: "{{ playbook_dir }}/../../target/release/neat-unreplicated"
@@ -49,8 +55,6 @@
 
 - name: Run clients
   hosts: client
-  vars:
-    some_client_count: "{{ client_count | default('1') }}"
   gather_facts: False
 
   tasks:
@@ -62,8 +66,8 @@
         ./neat-unreplicated
           --barrier-host {{ groups['service'][0] }}
           --tls
-          --client-index {{ (groups['client'].index(inventory_hostname) | int) * (some_client_count | int) }}
-          --client-count {{ some_client_count }}
+          --client-index {{ (groups['client'].index(inventory_hostname) | int) * (client_count | int) }}
+          --client-count {{ client_count }}
           --client-sec 10
           1> ./unreplicated-{{ inventory_hostname }}.txt
           2> ./err.log

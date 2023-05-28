@@ -5,7 +5,8 @@ use std::{
 
 use crate::{message::Transport, State};
 
-/// if `M` is `Ord`, then a sorted `Message<M>` will have deterministic content.
+/// Why `M` go first? Because if `M` is `Ord`, then a sorted `Message<M>` will
+/// have deterministic content.
 pub type Message<M> = Vec<(M, IpAddr)>;
 
 pub struct Service<M, E, F> {

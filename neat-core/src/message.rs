@@ -35,6 +35,27 @@ where
     }
 }
 
+pub use crate::barrier::Message as Barrier;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default)]
+pub struct BarrierLift;
+
+// TODO
+// impl<S, M> Lift<S, Barrier<M>> for BarrierLift
+// where
+//     S: FunctionalState<M>,
+// {
+//     type Out<'o> = Barrier<S::Output<'o>> where Self: 'o, S: 'o;
+
+//     fn update<'a>(&'a mut self, state: &'a mut S, message: Barrier<M>) -> Self::Out<'a> {
+//         let mut output = Vec::new();
+//         for (message, host) in message {
+//             output.push((state.update(message), host))
+//         }
+//         output
+//     }
+// }
+
 pub use crate::dispatch::Message as Dispatch;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default)]
