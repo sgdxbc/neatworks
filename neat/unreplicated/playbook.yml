@@ -6,8 +6,10 @@
   tasks:
   - name: Set fact
     ansible.builtin.set_fact:
-      client_count: 1
       work_dir: /local/cowsay
+      client_count: 1
+      # blank for UDP & 1 worker thread
+      flags:
 
 - name: Build artifacts
   hosts: localhost
@@ -50,7 +52,7 @@
       tmux new-session -d -s neat-unreplicated
       "{{ work_dir }}/neat-unreplicated 
         --barrier-host {{ groups['service'][0] }}
-        --tls
+        {{ flags }}
         || read _"
 
 - name: Run clients
@@ -65,7 +67,7 @@
       ansible.builtin.shell:
         ./neat-unreplicated
           --barrier-host {{ groups['service'][0] }}
-          --tls
+          {{ flags }}
           --client-index {{ (groups['client'].index(inventory_hostname) | int) * (client_count | int) }}
           --client-count {{ client_count }}
           --client-sec 10

@@ -1,5 +1,6 @@
 use std::{
     net::{IpAddr, SocketAddr},
+    sync::atomic::{AtomicUsize, Ordering::SeqCst},
     time::{Duration, Instant},
 };
 
@@ -13,10 +14,14 @@ use neat_core::{
 };
 use neat_tokio::barrier::{provide_barrier, use_barrier};
 use neat_unreplicated::{client, AppLift, Client, Replica};
+use nix::{
+    sched::{sched_setaffinity, CpuSet},
+    unistd::Pid,
+};
 use rand::{rngs::StdRng, SeedableRng};
 use serde::{Deserialize, Serialize};
 use tokio::{
-    select,
+    runtime, select,
     signal::ctrl_c,
     spawn,
     time::{sleep, timeout},
@@ -134,9 +139,10 @@ async fn run_replica_udp(_cli: Cli, route: ClientTable, replica_addr: SocketAddr
         &egress,
         Lift(de(), TransportLift).install(Closure(|(_, message)| message).install(&mut replica)),
     );
+    let shutdown = ctrl_c();
     select! {
         _ = ingress.start() => unreachable!(),
-        result = ctrl_c() => result.unwrap(),
+        result = shutdown => result.unwrap(),
     }
 
     // print some stats if needed
@@ -242,9 +248,11 @@ async fn run_replica_tcp(_cli: Cli, route: ClientTable, replica_addr: SocketAddr
     let mut replica = Replica::new(app);
 
     let mut replica_drive = Drive::from(replica_wire);
+    let shutdown = ctrl_c();
+    tokio::pin!(shutdown);
     select! {
         _ = replica_drive.run(&mut replica) => {}  // gracefully shutdown
-        result = ctrl_c() => result.unwrap(),
+        result = &mut shutdown => result.unwrap(),
     }
 
     let _replica = replica;
@@ -354,9 +362,11 @@ async fn run_replica_tls(_cli: Cli, route: ClientTable, replica_addr: SocketAddr
     let mut replica = Replica::new(app);
 
     let mut replica_drive = Drive::from(replica_wire);
+    let shutdown = ctrl_c();
+    tokio::pin!(shutdown);
     select! {
         _ = replica_drive.run(&mut replica) => {}  // gracefully shutdown
-        result = ctrl_c() => result.unwrap(),
+        result = &mut shutdown => result.unwrap(),
     }
 
     let _replica = replica;
@@ -370,30 +380,34 @@ enum BarrierUser {
 
 #[derive(Parser)]
 struct Cli {
-    #[clap(long)]
-    client_index: Option<usize>,
-    #[clap(long, default_value_t = 1)]
-    client_count: usize,
     #[clap(long, default_value_t = 0)]
     barrier_count: usize,
     #[clap(long)]
     barrier_host: Option<IpAddr>,
+
+    #[clap(long)]
+    client_index: Option<usize>,
+    #[clap(long, default_value_t = 1)]
+    client_count: usize,
     #[clap(long, default_value_t = 1)]
     client_sec: u64,
+
+    #[clap(long, default_value_t = 1)]
+    thread_count: usize,
+
     #[clap(long)]
     tcp: bool,
     #[clap(long)]
     tls: bool,
 }
 
-#[tokio::main]
-async fn main() {
+async fn init() -> Option<(Cli, ClientTable, SocketAddr)> {
     let cli = Cli::parse();
 
     if cli.barrier_count != 0 {
         provide_barrier::<BarrierUser>(SocketAddr::from(([0, 0, 0, 0], 60000)), cli.barrier_count)
             .await;
-        return;
+        return None;
     }
 
     let user = match cli.client_index {
@@ -423,39 +437,70 @@ async fn main() {
             }
         }
     }
-    let replica_addr = replica.unwrap();
+    Some((cli, route, replica.unwrap()))
+}
 
+fn main() {
+    let runtime = runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    let Some((cli, route, replica_addr)) = runtime.block_on(init()) else {
+        return;
+    };
     if cli.client_index.is_some() {
-        sleep(Duration::from_millis(100)).await;
-        let transport;
-        let latencies = if cli.tls {
-            transport = "tls";
-            run_clients_tls(cli, route, replica_addr).await
-        } else if cli.tcp {
-            transport = "tcp";
-            run_clients_tcp(cli, route, replica_addr).await
-        } else {
-            transport = "udp";
-            run_clients_udp(cli, route, replica_addr).await
-        };
-        for (index, mut client_latencies) in latencies {
-            client_latencies.sort_unstable();
-            println!(
-                "{index},{transport},{},{}",
-                client_latencies.len(),
-                client_latencies
-                    .get(client_latencies.len() / 2)
-                    .unwrap_or(&Duration::ZERO)
-                    .as_secs_f64()
-            );
-        }
+        runtime.block_on(async move {
+            sleep(Duration::from_millis(100)).await;
+            let transport;
+            let latencies = if cli.tls {
+                transport = "tls";
+                run_clients_tls(cli, route, replica_addr).await
+            } else if cli.tcp {
+                transport = "tcp";
+                run_clients_tcp(cli, route, replica_addr).await
+            } else {
+                transport = "udp";
+                run_clients_udp(cli, route, replica_addr).await
+            };
+            for (index, mut client_latencies) in latencies {
+                client_latencies.sort_unstable();
+                println!(
+                    "{index},{transport},{},{}",
+                    client_latencies.len(),
+                    client_latencies
+                        .get(client_latencies.len() / 2)
+                        .unwrap_or(&Duration::ZERO)
+                        .as_secs_f64()
+                );
+            }
+        });
     } else {
-        if cli.tls {
-            run_replica_tls(cli, route, replica_addr).await
-        } else if cli.tcp {
-            run_replica_tcp(cli, route, replica_addr).await
-        } else {
-            run_replica_udp(cli, route, replica_addr).await
+        fn set_affinity() {
+            static CPU_ID: AtomicUsize = AtomicUsize::new(0);
+            let mut cpu_set = CpuSet::new();
+            cpu_set.set(CPU_ID.fetch_add(1, SeqCst)).unwrap();
+            sched_setaffinity(Pid::from_raw(0), &cpu_set).unwrap();
         }
+        set_affinity();
+
+        if cli.thread_count == 0 {
+            runtime::Builder::new_current_thread().enable_all().build()
+        } else {
+            runtime::Builder::new_multi_thread()
+                .worker_threads(cli.thread_count)
+                .on_thread_start(set_affinity)
+                .enable_all()
+                .build()
+        }
+        .unwrap()
+        .block_on(async move {
+            if cli.tls {
+                run_replica_tls(cli, route, replica_addr).await
+            } else if cli.tcp {
+                run_replica_tcp(cli, route, replica_addr).await
+            } else {
+                run_replica_udp(cli, route, replica_addr).await
+            }
+        })
     }
 }

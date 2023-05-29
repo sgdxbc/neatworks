@@ -8,6 +8,7 @@ clap = { version = "4.2.7", features = ["derive"] }
 neat-bincode = { version = "0.1.0", path = "../../neat-bincode" }
 neat-core = { version = "0.1.0", path = "../../neat-core" }
 neat-tokio = { version = "0.1.0", path = "../../neat-tokio" }
+nix = "0.26.2"
 rand = "0.8.5"
 serde = { version = "1.0.160", features = ["derive"] }
 tokio = { version = "1.27.0", features = ["macros", "rt-multi-thread", "signal", "time"] }

@@ -7,7 +7,7 @@
   - name: Set fallback value for variables
     ansible.builtin.set_fact:
       interface: ens1f0
-      irq_cpu_list: 47
+      irq_cpu_list: 12-15
       work_dir: /local/cowsay
 
   - name: Set interface ring parameters
@@ -18,7 +18,7 @@
 
   - name: Set interface channels
     ansible.builtin.command:
-      ethtool --set-channels {{ interface }} combined 1
+      ethtool --set-channels {{ interface }} combined 4
     become: True
 
   - name: Stop irqbalance service
@@ -37,4 +37,9 @@
   - name: Set IRQ affinity
     ansible.builtin.shell:
       "{{ work_dir }}/set_irq_affinity_cpulist.sh {{ irq_cpu_list }} {{ interface }}"
+    become: True
+
+  - name: Set CPU frequency governor
+    ansible.builtin.command:
+      cpupower frequency-set --governor performance
     become: True

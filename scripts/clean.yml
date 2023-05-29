@@ -1,0 +1,13 @@
+---
+- name: Clean up zombie processes and long running sessions
+  hosts: all
+  gather_facts: False
+
+  tasks:
+  - name: Clean up processes
+    ansible.builtin.shell:
+      pkill -KILL neat || true
+  - name: Clean up tmux sessions
+    # consider alternative that avoid killing unrelated sessions
+    ansible.builtin.shell:
+      tmux kill-server || true
