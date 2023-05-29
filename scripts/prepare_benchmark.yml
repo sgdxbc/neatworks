@@ -1,0 +1,40 @@
+---
+- name: Prepare for benchmark
+  hosts: replica
+  gather_facts: False
+
+  tasks:
+  - name: Set fallback value for variables
+    ansible.builtin.set_fact:
+      interface: ens1f0
+      irq_cpu_list: 47
+      work_dir: /local/cowsay
+
+  - name: Set interface ring parameters
+    ansible.builtin.command:
+      ethtool --set-ring {{ interface }} rx 8192 tx 8192
+    become: True
+    ignore_errors: True  # when interface unchanged
+
+  - name: Set interface channels
+    ansible.builtin.command:
+      ethtool --set-channels {{ interface }} combined 1
+    become: True
+
+  - name: Stop irqbalance service
+    ansible.builtin.command:
+      systemctl stop irqbalance.service
+    become: True
+
+  - name: Synchronize IRQ affinity scripts
+    ansible.posix.synchronize:
+      src: "{{ playbook_dir }}/{{ item }}"
+      dest: "{{ work_dir }}"
+    with_items:
+      - common_irq_affinity.sh
+      - set_irq_affinity_cpulist.sh
+
+  - name: Set IRQ affinity
+    ansible.builtin.shell:
+      "{{ work_dir }}/set_irq_affinity_cpulist.sh {{ irq_cpu_list }} {{ interface }}"
+    become: True

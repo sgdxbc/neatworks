@@ -53,7 +53,11 @@ where
     }
 }
 
-async fn run_clients_udp(cli: Cli, route: ClientTable, replica_addr: SocketAddr) {
+async fn run_clients_udp(
+    cli: Cli,
+    route: ClientTable,
+    replica_addr: SocketAddr,
+) -> Vec<(usize, Vec<Duration>)> {
     use client::Message;
 
     let client_index = cli.client_index.unwrap();
@@ -109,19 +113,12 @@ async fn run_clients_udp(cli: Cli, route: ClientTable, replica_addr: SocketAddr)
     for ingress in ingress_tasks {
         ingress.abort();
     }
+    let mut latencies = Vec::new();
     for (index, client) in (client_index..client_index + cli.client_count).zip(clients) {
         let client = client.await.unwrap(); //
-        let mut latencies = client.result.latencies;
-        latencies.sort();
-        println!(
-            "{index},{},{}",
-            latencies.len(),
-            latencies
-                .get(latencies.len() * 99 / 100)
-                .unwrap_or(&Duration::ZERO)
-                .as_secs_f64()
-        );
+        latencies.push((index, client.result.latencies));
     }
+    latencies
 }
 
 async fn run_replica_udp(_cli: Cli, route: ClientTable, replica_addr: SocketAddr) {
@@ -146,7 +143,11 @@ async fn run_replica_udp(_cli: Cli, route: ClientTable, replica_addr: SocketAddr
     let _replica = replica;
 }
 
-async fn run_clients_tcp(cli: Cli, route: ClientTable, replica_addr: SocketAddr) {
+async fn run_clients_tcp(
+    cli: Cli,
+    route: ClientTable,
+    replica_addr: SocketAddr,
+) -> Vec<(usize, Vec<Duration>)> {
     use neat_unreplicated::client::Message;
 
     let client_index = cli.client_index.unwrap();
@@ -208,19 +209,12 @@ async fn run_clients_tcp(cli: Cli, route: ClientTable, replica_addr: SocketAddr)
     for connection in connections {
         connection.abort();
     }
+    let mut latencies = Vec::new();
     for (index, client) in (client_index..client_index + cli.client_count).zip(clients) {
         let client = client.await.unwrap(); //
-        let mut latencies = client.result.latencies;
-        latencies.sort();
-        println!(
-            "{index},{},{}",
-            latencies.len(),
-            latencies
-                .get(latencies.len() * 99 / 100)
-                .unwrap_or(&Duration::ZERO)
-                .as_secs_f64()
-        );
+        latencies.push((index, client.result.latencies));
     }
+    latencies
 }
 
 async fn run_replica_tcp(_cli: Cli, route: ClientTable, replica_addr: SocketAddr) {
@@ -256,7 +250,11 @@ async fn run_replica_tcp(_cli: Cli, route: ClientTable, replica_addr: SocketAddr
     let _replica = replica;
 }
 
-async fn run_clients_tls(cli: Cli, route: ClientTable, replica_addr: SocketAddr) {
+async fn run_clients_tls(
+    cli: Cli,
+    route: ClientTable,
+    replica_addr: SocketAddr,
+) -> Vec<(usize, Vec<Duration>)> {
     use neat_unreplicated::client::Message;
 
     let client_index = cli.client_index.unwrap();
@@ -321,19 +319,12 @@ async fn run_clients_tls(cli: Cli, route: ClientTable, replica_addr: SocketAddr)
     for connection in connections {
         connection.abort();
     }
+    let mut latencies = Vec::new();
     for (index, client) in (client_index..client_index + cli.client_count).zip(clients) {
         let client = client.await.unwrap(); //
-        let mut latencies = client.result.latencies;
-        latencies.sort();
-        println!(
-            "{index},{},{}",
-            latencies.len(),
-            latencies
-                .get(latencies.len() * 99 / 100)
-                .unwrap_or(&Duration::ZERO)
-                .as_secs_f64()
-        );
+        latencies.push((index, client.result.latencies));
     }
+    latencies
 }
 
 async fn run_replica_tls(_cli: Cli, route: ClientTable, replica_addr: SocketAddr) {
@@ -436,13 +427,35 @@ async fn main() {
 
     if cli.client_index.is_some() {
         sleep(Duration::from_millis(100)).await;
-    }
-    match (cli.client_index, cli.tls, cli.tcp) {
-        (Some(_), false, false) => run_clients_udp(cli, route, replica_addr).await,
-        (None, false, false) => run_replica_udp(cli, route, replica_addr).await,
-        (Some(_), false, true) => run_clients_tcp(cli, route, replica_addr).await,
-        (None, false, true) => run_replica_tcp(cli, route, replica_addr).await,
-        (Some(_), true, _) => run_clients_tls(cli, route, replica_addr).await,
-        (None, true, _) => run_replica_tls(cli, route, replica_addr).await,
+        let transport;
+        let latencies = if cli.tls {
+            transport = "tls";
+            run_clients_tls(cli, route, replica_addr).await
+        } else if cli.tcp {
+            transport = "tcp";
+            run_clients_tcp(cli, route, replica_addr).await
+        } else {
+            transport = "udp";
+            run_clients_udp(cli, route, replica_addr).await
+        };
+        for (index, mut client_latencies) in latencies {
+            client_latencies.sort_unstable();
+            println!(
+                "{index},{transport},{},{}",
+                client_latencies.len(),
+                client_latencies
+                    .get(client_latencies.len() / 2)
+                    .unwrap_or(&Duration::ZERO)
+                    .as_secs_f64()
+            );
+        }
+    } else {
+        if cli.tls {
+            run_replica_tls(cli, route, replica_addr).await
+        } else if cli.tcp {
+            run_replica_tcp(cli, route, replica_addr).await
+        } else {
+            run_replica_udp(cli, route, replica_addr).await
+        }
     }
 }

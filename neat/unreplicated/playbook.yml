@@ -7,7 +7,7 @@
   - name: Set fact
     ansible.builtin.set_fact:
       client_count: 1
-      work_dir: "/local/cowsay"
+      work_dir: /local/cowsay
 
 - name: Build artifacts
   hosts: localhost
