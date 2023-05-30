@@ -102,7 +102,7 @@ pub struct Commit {
     pub(crate) replica_id: u8,
 }
 
-pub type Egress = neat_core::message::Egress<u8, (FromReplica, Signature)>;
+pub type Egress = neat_core::message::Route<u8, (FromReplica, Signature)>;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub enum TimeoutEvent {

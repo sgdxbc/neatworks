@@ -7,8 +7,8 @@ use clap::Parser;
 use neat_bincode::{de, ser};
 use neat_core::{
     app::{Closure, FunctionalState},
-    message::{Egress, EgressLift, Transport, TransportLift},
-    route::{ClientTable, ReplicaTable},
+    message::{Route, RouteLift, TransportLift},
+    route::{self, ClientTable, ReplicaTable},
     App, Lift, {Drive, State, Wire},
 };
 use neat_pbft::{client, Client, Replica, Sign, Verify};
@@ -53,66 +53,6 @@ where
     }
 }
 
-struct EgressRoute<R, S> {
-    strategy: R,
-    route: ReplicaTable,
-    state: S,
-}
-
-trait RouteStrategy {
-    fn lookup_addr(route: &ReplicaTable, id: u8) -> SocketAddr;
-    fn is_exclude(&self, id: u8) -> bool;
-}
-
-struct ClientEgress;
-
-impl RouteStrategy for ClientEgress {
-    fn lookup_addr(route: &ReplicaTable, id: u8) -> SocketAddr {
-        route.public_addr(id)
-    }
-
-    fn is_exclude(&self, _: u8) -> bool {
-        false
-    }
-}
-
-struct ReplicaEgress(u8);
-
-impl RouteStrategy for ReplicaEgress {
-    fn lookup_addr(route: &ReplicaTable, id: u8) -> SocketAddr {
-        route.internal_addr(id)
-    }
-
-    fn is_exclude(&self, id: u8) -> bool {
-        id == self.0
-    }
-}
-
-impl<R, S> State<Egress<u8, Vec<u8>>> for EgressRoute<R, S>
-where
-    R: RouteStrategy,
-    S: State<Transport<Vec<u8>>>,
-{
-    fn update(&mut self, message: Egress<u8, Vec<u8>>) {
-        match message {
-            Egress::To(replica_id, message) => {
-                assert!(!self.strategy.is_exclude(replica_id));
-                let addr = R::lookup_addr(&self.route, replica_id);
-                self.state.update((addr, message))
-            }
-            Egress::ToAll(message) => {
-                for id in 0..self.route.len() as u8 {
-                    if self.strategy.is_exclude(id) {
-                        continue;
-                    }
-                    self.state
-                        .update((R::lookup_addr(&self.route, id), message.clone()))
-                }
-            }
-        }
-    }
-}
-
 async fn run_clients(cli: Cli, route: ClientTable, replica_route: ReplicaTable) {
     use client::Message;
 
@@ -134,11 +74,10 @@ async fn run_clients(cli: Cli, route: ClientTable, replica_route: ReplicaTable) 
         let mut client = Client::new(
             client_id,
             cli.faulty_count,
-            ser().install(Closure(Egress::ToAll).install(EgressRoute {
-                strategy: ClientEgress,
-                route: replica_route.clone(),
-                state: socket.clone(),
-            })),
+            ser().install(
+                Closure(Route::ToAll)
+                    .install(route::External(replica_route.clone(), socket.clone())),
+            ),
             workload,
         );
         clients.push(spawn(async move {
@@ -205,11 +144,13 @@ async fn run_replica(cli: Cli, route: ClientTable, replica_route: ReplicaTable) 
         cli.faulty_count,
         Sign::new(&replica_route, replica_id),
         app,
-        ser().lift_default::<EgressLift<_>>().install(EgressRoute {
-            strategy: ReplicaEgress(replica_id),
-            route: replica_route.clone(),
-            state: socket.clone(),
-        }),
+        ser()
+            .lift_default::<RouteLift<_>>()
+            .install(route::Internal(
+                replica_route.clone(),
+                replica_id,
+                socket.clone(),
+            )),
         neat_tokio::time::Control::default(),
     );
 

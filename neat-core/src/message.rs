@@ -119,13 +119,9 @@ where
     }
 }
 
-// TODO better name
-pub enum Egress<K, M> {
-    To(K, M),
-    ToAll(M),
-}
+pub use crate::route::Message as Route;
 
-impl<K, M> Egress<K, M> {
+impl<K, M> Route<K, M> {
     pub fn to(k: K) -> impl FnOnce(M) -> Self {
         move |m| Self::To(k, m)
     }
@@ -133,18 +129,18 @@ impl<K, M> Egress<K, M> {
 
 // type inference works better with `K`
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default)]
-pub struct EgressLift<K>(PhantomData<K>);
+pub struct RouteLift<K>(PhantomData<K>);
 
-impl<S, K, M> Lift<S, Egress<K, M>> for EgressLift<K>
+impl<S, K, M> Lift<S, Route<K, M>> for RouteLift<K>
 where
     S: FunctionalState<M>,
 {
-    type Out<'o> = Egress<K, S::Output<'o>> where Self: 'o, S: 'o;
+    type Out<'o> = Route<K, S::Output<'o>> where Self: 'o, S: 'o;
 
-    fn update<'a>(&'a mut self, state: &'a mut S, message: Egress<K, M>) -> Self::Out<'a> {
+    fn update<'a>(&'a mut self, state: &'a mut S, message: Route<K, M>) -> Self::Out<'a> {
         match message {
-            Egress::To(dest, message) => Egress::To(dest, state.update(message)),
-            Egress::ToAll(message) => Egress::ToAll(state.update(message)),
+            Route::To(dest, message) => Route::To(dest, state.update(message)),
+            Route::ToAll(message) => Route::ToAll(state.update(message)),
         }
     }
 }
