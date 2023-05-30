@@ -1,3 +1,5 @@
+use std::ops::{Deref, DerefMut};
+
 pub trait State<Message> {
     fn update(&mut self, message: Message);
 
@@ -16,13 +18,13 @@ pub trait State<Message> {
     }
 }
 
-impl<M, T: State<M> + ?Sized, U: std::ops::DerefMut<Target = T>> State<M> for U {
+// want to blanket impl over many `impl DerefMut<Target = T> and `M`, but those
+// cause confliction :|
+impl<M, T: State<M> + ?Sized> State<M> for &mut T {
     fn update(&mut self, message: M) {
         T::update(self, message)
     }
 }
-
-// want to add blanket impl for `M` as well, but that causes confliction :|
 
 pub trait SharedClone: Clone {}
 
@@ -45,5 +47,19 @@ where
         if let Some(message) = message {
             self.0.update(message)
         }
+    }
+}
+
+impl<S> Deref for Filtered<S> {
+    type Target = S;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl<S> DerefMut for Filtered<S> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.0
     }
 }

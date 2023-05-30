@@ -72,13 +72,9 @@ async fn run_clients_udp(
         let client_id = route.identity(index);
         let client_addr = route.lookup_addr(client_id);
         let client_wire = Wire::default();
-        let egress = neat_tokio::udp::Out::bind(client_addr).await;
-        let mut ingress = neat_tokio::udp::In::new(
-            &egress,
-            Lift(de(), TransportLift).install(
-                Closure(|(_, message)| Message::Handle(message)).install(client_wire.state()),
-            ),
-        );
+        let socket = neat_tokio::udp::Socket::bind(client_addr).await;
+        let ingress = Lift(de(), TransportLift)
+            .install(Closure(|(_, message)| Message::Handle(message)).install(client_wire.state()));
         let workload = Workload {
             latencies: Default::default(),
             outstanding_start: Instant::now(),
@@ -87,7 +83,7 @@ async fn run_clients_udp(
         let mut client = Client::new(
             client_id,
             Closure(move |message| (replica_addr, message))
-                .install(Lift(ser(), TransportLift).install(egress)),
+                .install(Lift(ser(), TransportLift).install(socket.clone())),
             workload,
         );
         clients.push(spawn(async move {
@@ -110,7 +106,7 @@ async fn run_clients_udp(
 
             client
         }));
-        ingress_tasks.push(spawn(async move { ingress.start().await }));
+        ingress_tasks.push(spawn(async move { socket.start(ingress).await }));
     }
 
     sleep(Duration::from_secs(cli.client_sec)).await;
@@ -127,21 +123,19 @@ async fn run_clients_udp(
 }
 
 async fn run_replica_udp(_cli: Cli, route: ClientTable, replica_addr: SocketAddr) {
-    let egress = neat_tokio::udp::Out::bind(replica_addr).await;
+    let socket = neat_tokio::udp::Socket::bind(replica_addr).await;
 
     let app = Null.lift(AppLift::default()).install_filtered(
         Closure(move |(id, message)| (route.lookup_addr(id), message))
-            .install(Lift(ser(), TransportLift).install(egress.clone())),
+            .install(Lift(ser(), TransportLift).install(socket.clone())),
     );
     let mut replica = Replica::new(app);
 
-    let mut ingress = neat_tokio::udp::In::new(
-        &egress,
-        Lift(de(), TransportLift).install(Closure(|(_, message)| message).install(&mut replica)),
-    );
+    let mut ingress =
+        Lift(de(), TransportLift).install(Closure(|(_, message)| message).install(&mut replica));
     let shutdown = ctrl_c();
     select! {
-        _ = ingress.start() => unreachable!(),
+        _ = socket.start(&mut ingress) => unreachable!(),
         result = shutdown => result.unwrap(),
     }
 

@@ -123,16 +123,9 @@ async fn run_clients(cli: Cli, route: ClientTable, replica_route: ReplicaTable) 
         let client_id = route.identity(index);
         let client_addr = route.lookup_addr(client_id);
         let client_wire = Wire::default();
-        let egress = udp::Out::bind(client_addr).await;
-        let mut ingress = udp::In::new(
-            &egress,
-            // Closure(|(_, message)| message).install(
-            //     de()
-            Lift(de(), TransportLift).install(
-                Closure(|(_, message)| message)
-                    .install(Closure(Message::Handle).install(client_wire.state())),
-            ),
-        );
+        let socket = neat_tokio::udp::Socket::bind(client_addr).await;
+        let ingress = Lift(de(), TransportLift)
+            .install(Closure(|(_, message)| Message::Handle(message)).install(client_wire.state()));
         let workload = Workload {
             latencies: Default::default(),
             outstanding_start: Instant::now(),
@@ -144,7 +137,7 @@ async fn run_clients(cli: Cli, route: ClientTable, replica_route: ReplicaTable) 
             ser().install(Closure(Egress::ToAll).install(EgressRoute {
                 strategy: ClientEgress,
                 route: replica_route.clone(),
-                state: egress,
+                state: socket.clone(),
             })),
             workload,
         );
@@ -168,7 +161,7 @@ async fn run_clients(cli: Cli, route: ClientTable, replica_route: ReplicaTable) 
 
             client
         }));
-        ingress_tasks.push(spawn(async move { ingress.start().await }));
+        ingress_tasks.push(spawn(async move { socket.start(ingress).await }));
     }
 
     sleep(Duration::from_secs(cli.client_sec)).await;
@@ -195,14 +188,14 @@ async fn run_replica(cli: Cli, route: ClientTable, replica_route: ReplicaTable) 
     let replica_wire = Wire::default();
 
     let replica_id = cli.replica_id.unwrap();
-    let client_egress = udp::Out::bind(replica_route.public_addr(replica_id)).await;
-    let egress = udp::Out::bind(replica_route.internal_addr(replica_id)).await;
+    let client_socket = udp::Socket::bind(replica_route.public_addr(replica_id)).await;
+    let socket = udp::Socket::bind(replica_route.internal_addr(replica_id)).await;
 
     let app = Null
         .lift(neat_pbft::AppLift::new(replica_id))
         .install_filtered(
             Closure(move |(id, message)| (route.lookup_addr(id), message))
-                .install(Lift(ser(), TransportLift).install(client_egress.clone())),
+                .install(Lift(ser(), TransportLift).install(client_socket.clone())),
         );
 
     let mut replica = Replica::new(
@@ -215,26 +208,18 @@ async fn run_replica(cli: Cli, route: ClientTable, replica_route: ReplicaTable) 
             .install(ser().lift_default::<EgressLift<_>>().install(EgressRoute {
                 strategy: ReplicaEgress(replica_id),
                 route: replica_route.clone(),
-                state: egress.clone(),
+                state: socket.clone(),
             })),
         neat_tokio::time::Control::default(),
     );
 
-    let mut client_ingress = udp::In::new(
-        &client_egress,
-        Lift(de(), TransportLift).install(
-            Closure(|(_, message)| ToReplica::Request(message)).install(replica_wire.state()),
-        ),
+    let client_ingress = Lift(de(), TransportLift)
+        .install(Closure(|(_, message)| ToReplica::Request(message)).install(replica_wire.state()));
+    let client_ingress = spawn(async move { client_socket.start(client_ingress).await });
+    let ingress = Lift(de(), TransportLift).install(
+        Closure(|(_, message)| message).install(Verify::new(&replica_route, replica_wire.state())),
     );
-    let client_ingress = spawn(async move { client_ingress.start().await });
-    let mut ingress = udp::In::new(
-        &egress,
-        Lift(de(), TransportLift).install(
-            Closure(|(_, message)| message)
-                .install(Verify::new(&replica_route, replica_wire.state())),
-        ),
-    );
-    let ingress = spawn(async move { ingress.start().await });
+    let ingress = spawn(async move { socket.start(ingress).await });
 
     let mut drive = Drive::from(replica_wire);
     let shutdown = ctrl_c();

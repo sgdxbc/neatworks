@@ -8,8 +8,8 @@ use tokio::{
     sync::mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender},
 };
 
-// design choice: select tx/rx in the same loop over split into two loops
-// design choice: unreliable tx over actively retry/back propogation
+// alternative design: select tx/rx in the same loop over split into two loops
+// alternative design: unreliable tx over actively retry/back propogation
 
 #[derive(Debug)]
 pub struct GeneralConnection<S, D, T> {

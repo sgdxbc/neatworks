@@ -1,3 +1,5 @@
+use std::ops::{Deref, DerefMut};
+
 use crate::actor::{Filtered, SharedClone, State};
 
 pub trait FunctionalState<Input> {
@@ -91,6 +93,20 @@ where
     }
 }
 
+impl<A, S> Deref for Install<A, S> {
+    type Target = S;
+
+    fn deref(&self) -> &Self::Target {
+        &self.1
+    }
+}
+
+impl<A, S> DerefMut for Install<A, S> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.1
+    }
+}
+
 impl<A, S> SharedClone for Install<A, S>
 where
     A: SharedClone,
@@ -114,6 +130,20 @@ where
     }
 }
 
+impl<S> Deref for Inspect<S> {
+    type Target = S;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl<S> DerefMut for Inspect<S> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.0
+    }
+}
+
 pub struct Lift<S, L>(pub S, pub L);
 
 impl<S, L, M> FunctionalState<M> for Lift<S, L>
@@ -124,5 +154,19 @@ where
 
     fn update(&mut self, input: M) -> Self::Output<'_> {
         self.1.update(&mut self.0, input)
+    }
+}
+
+impl<S, L> Deref for Lift<S, L> {
+    type Target = S;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl<S, L> DerefMut for Lift<S, L> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.0
     }
 }

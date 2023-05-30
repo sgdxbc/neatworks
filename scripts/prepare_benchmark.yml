@@ -7,18 +7,20 @@
   - name: Set fallback value for variables
     ansible.builtin.set_fact:
       interface: ens1f0
-      irq_cpu_list: 12-15
+      ring_parameters: rx 8192 tx 8192
+      channel_parameters: combined 1
+      irq_cpu_list: 15
       work_dir: /local/cowsay
 
   - name: Set interface ring parameters
     ansible.builtin.command:
-      ethtool --set-ring {{ interface }} rx 8192 tx 8192
+      ethtool --set-ring {{ interface }} {{ ring_parameters }}
     become: True
     ignore_errors: True  # when interface unchanged
 
   - name: Set interface channels
     ansible.builtin.command:
-      ethtool --set-channels {{ interface }} combined 4
+      ethtool --set-channels {{ interface }} {{ channel_parameters }}
     become: True
 
   - name: Stop irqbalance service

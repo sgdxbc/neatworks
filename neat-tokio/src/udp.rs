@@ -1,50 +1,27 @@
 use std::{net::SocketAddr, sync::Arc};
 
-use neat_core::{actor, message::Transport};
+use neat_core::{actor, message::Transport, State};
 use tokio::{net::UdpSocket, spawn};
 
-pub struct In<A> {
-    pub socket: Arc<UdpSocket>,
-    pub state: A,
-}
-
-impl<A> In<A> {
-    pub async fn bind(addr: SocketAddr, state: A) -> Self {
-        Self {
-            socket: Arc::new(UdpSocket::bind(addr).await.unwrap()),
-            state,
-        }
-    }
-
-    pub fn new(out: &Out, state: A) -> Self {
-        Self {
-            socket: out.0.clone(),
-            state,
-        }
-    }
-
-    pub async fn start(&mut self)
-    where
-        A: for<'a> actor::State<Transport<&'a [u8]>>,
-    {
-        let mut buf = vec![0; 65536];
-        loop {
-            let (len, remote) = self.socket.recv_from(&mut buf).await.unwrap();
-            self.state.update((remote, &buf[..len]))
-        }
-    }
-}
-
+// any better name?
 #[derive(Debug, Clone)]
-pub struct Out(pub Arc<UdpSocket>);
+pub struct Socket(pub Arc<UdpSocket>);
 
-impl Out {
+impl Socket {
     pub async fn bind(addr: SocketAddr) -> Self {
         Self(Arc::new(UdpSocket::bind(addr).await.unwrap()))
     }
+
+    pub async fn start(&self, mut state: impl for<'a> State<Transport<&'a [u8]>>) {
+        let mut buf = vec![0; 65536];
+        loop {
+            let (len, remote) = self.0.recv_from(&mut buf).await.unwrap();
+            state.update((remote, &buf[..len]))
+        }
+    }
 }
 
-impl actor::State<Transport<Vec<u8>>> for Out {
+impl actor::State<Transport<Vec<u8>>> for Socket {
     fn update(&mut self, message: Transport<Vec<u8>>) {
         let (target, buf) = message;
         let socket = self.0.clone();
