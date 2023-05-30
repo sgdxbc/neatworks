@@ -4,7 +4,7 @@ pub mod replica;
 
 pub use client::Client;
 pub use crypto::{Sign, Signature, Verify};
-pub use replica::{AppLift, Replica, ToReplica};
+pub use replica::{AppLift, FromReplica, Replica};
 
 use serde::{Deserialize, Serialize};
 

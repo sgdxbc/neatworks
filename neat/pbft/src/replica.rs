@@ -13,10 +13,11 @@ use neat_core::{
         Lift,
         Timeout::{Set, Unset},
     },
+    FunctionalState,
 };
 use serde::{Deserialize, Serialize};
 
-use crate::{Reply, Request};
+use crate::{Reply, Request, Sign, Signature};
 
 type ViewNum = u16;
 type OpNum = u32;
@@ -72,8 +73,7 @@ where
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub enum ToReplica {
-    Request(Request),
+pub enum FromReplica {
     PrePrepare(PrePrepare, Vec<Request>),
     Prepare(Prepare),
     Commit(Commit),
@@ -102,7 +102,7 @@ pub struct Commit {
     pub(crate) replica_id: u8,
 }
 
-pub type Egress = neat_core::message::Egress<u8, ToReplica>;
+pub type Egress = neat_core::message::Egress<u8, (FromReplica, Signature)>;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub enum TimeoutEvent {
@@ -124,22 +124,28 @@ pub struct Replica<U, E, T> {
     client_table: HashMap<u32, u32>,
     log: Vec<Vec<Request>>, // save it locally or send it to external actor?
     // pre_prepares, prepared and committed get cleared when entering every view
-    pre_prepares: HashMap<OpNum, (PrePrepare, Vec<Request>)>,
-    prepared: HashMap<OpNum, HashMap<u8, Prepare>>,
+    pre_prepares: HashMap<OpNum, (PrePrepare, Vec<Request>, Signature)>,
+    prepared: HashMap<OpNum, HashMap<u8, (Prepare, Signature)>>,
     committed: HashMap<OpNum, HashMap<u8, Commit>>,
     execute_number: OpNum,
 
+    sign: Sign, // this could be yet another generic, but i hardly see another alternative option for the type
     pub upcall: U,
     pub egress: E,
     pub timeout: T,
 }
 
 impl<U, E, T> Replica<U, E, T> {
-    pub fn new(id: u8, n: usize, f: usize, upcall: U, egress: E, timeout: T) -> Self {
+    pub fn new(id: u8, n: usize, f: usize, sign: Sign, upcall: U, egress: E, timeout: T) -> Self {
         #[allow(clippy::int_plus_one)] // to conform conventional statement
         {
             assert!(n >= 3 * f + 1);
         }
+
+        if n == 1 {
+            todo!("single replica setup")
+        }
+
         Self {
             id,
             n,
@@ -152,6 +158,7 @@ impl<U, E, T> Replica<U, E, T> {
             prepared: Default::default(),
             committed: Default::default(),
             execute_number: 0,
+            sign,
             upcall,
             egress,
             timeout,
@@ -159,18 +166,30 @@ impl<U, E, T> Replica<U, E, T> {
     }
 }
 
-impl<U, E, T> State<ToReplica> for Replica<U, E, T>
+impl<U, E, T> State<Request> for Replica<U, E, T>
 where
     U: for<'m> State<Upcall<'m>>,
     E: State<Egress>,
     T: State<Timeout>,
 {
-    fn update(&mut self, message: ToReplica) {
+    fn update(&mut self, message: Request) {
+        self.handle_request(message)
+    }
+}
+
+impl<U, E, T> State<(FromReplica, Signature)> for Replica<U, E, T>
+where
+    U: for<'m> State<Upcall<'m>>,
+    E: State<Egress>,
+    T: State<Timeout>,
+{
+    fn update(&mut self, message: (FromReplica, Signature)) {
         match message {
-            ToReplica::Request(message) => self.handle_request(message),
-            ToReplica::PrePrepare(message, requests) => self.handle_pre_prepare(message, requests),
-            ToReplica::Prepare(message) => self.handle_prepare(message),
-            ToReplica::Commit(message) => self.handle_commit(message),
+            (FromReplica::PrePrepare(message, requests), signature) => {
+                self.handle_pre_prepare(message, requests, signature)
+            }
+            (FromReplica::Prepare(message), signature) => self.handle_prepare(message, signature),
+            (FromReplica::Commit(message), signature) => self.handle_commit(message, signature),
         }
     }
 }
@@ -187,11 +206,11 @@ where
                 assert_eq!(self.view_num, view_num);
                 assert!(self.prepared_slot(op_num).is_none());
                 //
-                if self.id == self.primary_id() {
-                    self.send_pre_prepare(op_num)
-                } else {
-                    self.send_prepare(op_num, Egress::ToAll)
-                }
+                // if self.id == self.primary_id() {
+                //     self.send_pre_prepare(op_num)
+                // } else {
+                //     self.send_prepare(op_num, Egress::ToAll)
+                // }
                 self.timeout
                     .update(Set(TimeoutEvent::Prepare(view_num, op_num)))
             }
@@ -199,7 +218,7 @@ where
                 assert_eq!(self.view_num, view_num);
                 assert!(self.committed_slot(op_num).is_none());
                 //
-                self.send_commit(op_num, Egress::ToAll);
+                // self.send_commit(op_num, Egress::ToAll);
                 self.timeout
                     .update(Set(TimeoutEvent::Commit(view_num, op_num)))
             }
@@ -213,7 +232,7 @@ impl<U, E, T> Replica<U, E, T> {
     }
 
     fn prepared_slot(&self, op_num: OpNum) -> Option<&[Request]> {
-        let Some((_, requests)) = self.pre_prepares.get(&op_num) else {
+        let Some((_, requests, _)) = self.pre_prepares.get(&op_num) else {
             return None;
         };
         if self
@@ -221,7 +240,7 @@ impl<U, E, T> Replica<U, E, T> {
             .get(&op_num)
             .unwrap_or(&Default::default())
             .len()
-            + 1 // self vote is implied
+            + 1 // count the pre-prepare
             >= self.n - self.f
         {
             Some(requests)
@@ -239,7 +258,6 @@ impl<U, E, T> Replica<U, E, T> {
             .get(&op_num)
             .unwrap_or(&Default::default())
             .len()
-            + 1 // self vote is implied
             >= self.n - self.f
         {
             Some(slot)
@@ -285,10 +303,6 @@ where
         self.client_table
             .insert(message.client_id, message.request_num);
 
-        if self.n == 1 {
-            todo!("single replica setup")
-        }
-
         // TODO batching
         let requests = vec![message];
         let pre_prepare = PrePrepare {
@@ -296,8 +310,13 @@ where
             op_num: self.op_num,
             digest: digest(&requests),
         };
+        let (FromReplica::PrePrepare(pre_prepare, requests), signature) = self
+            .sign
+            .update(FromReplica::PrePrepare(pre_prepare, requests)) else {
+            unimplemented!()
+        };
         self.pre_prepares
-            .insert(self.op_num, (pre_prepare, requests));
+            .insert(self.op_num, (pre_prepare, requests, signature));
         self.send_pre_prepare(self.op_num);
         self.timeout
             .update(Set(TimeoutEvent::Prepare(self.view_num, self.op_num)));
@@ -305,7 +324,12 @@ where
         assert!(!self.committed.contains_key(&self.op_num));
     }
 
-    fn handle_pre_prepare(&mut self, message: PrePrepare, requests: Vec<Request>) {
+    fn handle_pre_prepare(
+        &mut self,
+        message: PrePrepare,
+        requests: Vec<Request>,
+        signature: Signature,
+    ) {
         if message.view_num < self.view_num {
             return;
         }
@@ -323,22 +347,33 @@ where
         let op_num = message.op_num;
         let digest = message.digest;
         self.pre_prepares
-            .insert(message.op_num, (message, requests));
+            .insert(message.op_num, (message, requests, signature));
         if let Some(prepared) = self.prepared.get_mut(&op_num) {
-            prepared.retain(|_, prepare| prepare.digest == digest);
+            prepared.retain(|_, (prepare, _)| prepare.digest == digest);
         }
         if let Some(committed) = self.committed.get_mut(&op_num) {
             committed.retain(|_, commit| commit.digest == digest);
         }
 
-        self.send_prepare(op_num, Egress::ToAll);
+        let prepare = Prepare {
+            view_num: self.view_num,
+            op_num,
+            digest,
+            replica_id: self.id,
+        };
+        let (FromReplica::Prepare(prepare), signature) = self.sign.update(FromReplica::Prepare(prepare)) else {
+            unimplemented!()
+        };
+        self.egress.update(Egress::ToAll((
+            FromReplica::Prepare(prepare.clone()),
+            signature,
+        )));
         self.timeout
             .update(Set(TimeoutEvent::Prepare(self.view_num, op_num)));
-        // `pre_prepares` implies the insertion
-        // self.insert_prepare(prepare);
+        self.insert_prepare(prepare, signature);
     }
 
-    fn handle_prepare(&mut self, message: Prepare) {
+    fn handle_prepare(&mut self, message: Prepare, signature: Signature) {
         if message.view_num < self.view_num {
             return;
         }
@@ -353,17 +388,17 @@ where
             }
             return;
         }
-        if let Some((pre_prepare, _)) = self.pre_prepares.get(&message.op_num) {
+        if let Some((pre_prepare, _, _)) = self.pre_prepares.get(&message.op_num) {
             if message.digest != pre_prepare.digest {
                 //
                 return;
             }
         }
 
-        self.insert_prepare(message);
+        self.insert_prepare(message, signature);
     }
 
-    fn handle_commit(&mut self, message: Commit) {
+    fn handle_commit(&mut self, message: Commit, _signature: Signature) {
         if message.view_num < self.view_num {
             return;
         }
@@ -376,7 +411,7 @@ where
             // self.send_commit(message.op_num, Egress::to(message.replica_id));
             return;
         }
-        if let Some((pre_prepare, _)) = self.pre_prepares.get(&message.op_num) {
+        if let Some((pre_prepare, _, _)) = self.pre_prepares.get(&message.op_num) {
             if message.digest != pre_prepare.digest {
                 //
                 return;
@@ -388,47 +423,41 @@ where
 
     fn send_pre_prepare(&mut self, op_num: OpNum) {
         assert_eq!(self.id, self.primary_id());
-        let (pre_prepare, requests) = self.pre_prepares[&op_num].clone();
-        self.egress
-            .update(Egress::ToAll(ToReplica::PrePrepare(pre_prepare, requests)));
+        let (pre_prepare, requests, signature) = self.pre_prepares[&op_num].clone();
+        self.egress.update(Egress::ToAll((
+            FromReplica::PrePrepare(pre_prepare, requests),
+            signature,
+        )));
     }
 
-    fn send_prepare(&mut self, op_num: OpNum, to_whom: impl FnOnce(ToReplica) -> Egress) {
-        assert_ne!(self.id, self.primary_id());
-        let prepare = Prepare {
-            view_num: self.view_num,
-            op_num,
-            digest: self.pre_prepares[&op_num].0.digest,
-            replica_id: self.id,
-        };
-        self.egress.update(to_whom(ToReplica::Prepare(prepare)));
-    }
-
-    fn send_commit(&mut self, op_num: OpNum, to_whom: impl FnOnce(ToReplica) -> Egress) {
-        let commit = Commit {
-            view_num: self.view_num,
-            op_num,
-            digest: self.pre_prepares[&op_num].0.digest,
-            replica_id: self.id,
-        };
-        self.egress.update(to_whom(ToReplica::Commit(commit)));
-    }
-
-    fn insert_prepare(&mut self, prepare: Prepare) {
+    fn insert_prepare(&mut self, prepare: Prepare, signature: Signature) {
         assert!(self.prepared_slot(prepare.op_num).is_none());
         let op_num = prepare.op_num;
+        let digest = prepare.digest;
         self.prepared
             .entry(op_num)
             .or_default()
-            .insert(prepare.replica_id, prepare);
+            .insert(prepare.replica_id, (prepare, signature));
         if self.prepared_slot(op_num).is_some() {
-            self.send_commit(op_num, Egress::ToAll);
             self.timeout
                 .update(Unset(TimeoutEvent::Prepare(self.view_num, op_num)));
+
+            let commit = Commit {
+                view_num: self.view_num,
+                op_num,
+                digest,
+                replica_id: self.id,
+            };
+            let (FromReplica::Commit(commit), signature) = self.sign.update(FromReplica::Commit(commit)) else {
+                unimplemented!()
+            };
+            self.egress.update(Egress::ToAll((
+                FromReplica::Commit(commit.clone()),
+                signature,
+            )));
             self.timeout
-                .update(Set(TimeoutEvent::Commit(self.view_num, op_num)));
-            // `pre_prepares` implies the insertion
-            // self.insert_commit(commit);
+                .update(Set(TimeoutEvent::Commit(self.view_num, op_num))); // `pre_prepares` implies the insertion
+            self.insert_commit(commit);
 
             // TODO adaptive batching
         }

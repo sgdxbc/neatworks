@@ -1,51 +1,41 @@
 use bincode::Options;
 use ed25519_dalek::{Keypair, PublicKey, SecretKey, Signer, Verifier};
-use neat_core::{actor::State, app::FunctionalState, route::ReplicaTable};
+use neat_core::{route::ReplicaTable, FunctionalState};
 
-use crate::replica::ToReplica;
+use crate::replica::FromReplica;
 
 pub type Signature = ed25519_dalek::Signature;
 
-fn replica_id(message: &ToReplica, n: usize) -> u8 {
+fn replica_id(message: &FromReplica, n: usize) -> u8 {
     match message {
-        ToReplica::Request(_) => unimplemented!(),
-        ToReplica::PrePrepare(message, _) => (message.view_num as usize % n) as u8,
-        ToReplica::Prepare(message) => message.replica_id,
-        ToReplica::Commit(message) => message.replica_id,
+        FromReplica::PrePrepare(message, _) => (message.view_num as usize % n) as u8,
+        FromReplica::Prepare(message) => message.replica_id,
+        FromReplica::Commit(message) => message.replica_id,
     }
 }
 
-pub struct Verify<S> {
+pub struct Verify {
     keys: Vec<PublicKey>,
-    pub state: S,
 }
 
-impl<S> Verify<S> {
-    pub fn new(route: &ReplicaTable, state: S) -> Self {
+impl Verify {
+    pub fn new(route: &ReplicaTable) -> Self {
         let keys = (0..route.len())
             .map(|i| (&SecretKey::from_bytes(&route.identity(i as _)).unwrap()).into())
             .collect();
-        Self { keys, state }
+        Self { keys }
     }
 }
 
-// not implement as PureState because later may need to send out `ViewChange`
-// to another state
-impl<S> State<(ToReplica, Signature)> for Verify<S>
-where
-    S: State<ToReplica>,
-{
-    fn update(&mut self, message: (ToReplica, Signature)) {
+impl FunctionalState<(FromReplica, Signature)> for Verify {
+    type Output<'output> = Option<(FromReplica, Signature)> where Self: 'output;
+
+    fn update(&mut self, message: (FromReplica, Signature)) -> Self::Output<'_> {
         let (message, signature) = message;
-        if self.keys[replica_id(&message, self.keys.len()) as usize]
+        self.keys[replica_id(&message, self.keys.len()) as usize]
             .verify(&bincode::options().serialize(&message).unwrap(), &signature)
-            .is_ok()
-        {
-            // TODO archive neccessary messages
-            self.state.update(message)
-        } else {
-            //
-        }
+            .ok()
+            .map(|()| (message, signature))
     }
 }
 
@@ -65,10 +55,10 @@ impl Sign {
     }
 }
 
-impl FunctionalState<ToReplica> for Sign {
-    type Output<'output> = (ToReplica, Signature) where Self: 'output;
+impl FunctionalState<FromReplica> for Sign {
+    type Output<'output> = (FromReplica, Signature) where Self: 'output;
 
-    fn update(&mut self, input: ToReplica) -> Self::Output<'_> {
+    fn update(&mut self, input: FromReplica) -> Self::Output<'_> {
         let signature = self
             .key
             .sign(&bincode::options().serialize(&input).unwrap());

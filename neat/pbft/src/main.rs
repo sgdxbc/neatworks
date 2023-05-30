@@ -11,7 +11,7 @@ use neat_core::{
     route::{ClientTable, ReplicaTable},
     App, Lift, {Drive, State, Wire},
 };
-use neat_pbft::{client, Client, Replica, Sign, ToReplica, Verify};
+use neat_pbft::{client, Client, Replica, Sign, Verify};
 use neat_tokio::{
     barrier::{provide_barrier, use_barrier},
     udp,
@@ -186,6 +186,7 @@ async fn run_clients(cli: Cli, route: ClientTable, replica_route: ReplicaTable) 
 
 async fn run_replica(cli: Cli, route: ClientTable, replica_route: ReplicaTable) {
     let replica_wire = Wire::default();
+    let request_wire = Wire::default();
 
     let replica_id = cli.replica_id.unwrap();
     let client_socket = udp::Socket::bind(replica_route.public_addr(replica_id)).await;
@@ -202,30 +203,33 @@ async fn run_replica(cli: Cli, route: ClientTable, replica_route: ReplicaTable) 
         replica_id,
         replica_route.len(),
         cli.faulty_count,
+        Sign::new(&replica_route, replica_id),
         app,
-        Sign::new(&replica_route, replica_id)
-            .lift_default::<EgressLift<_>>()
-            .install(ser().lift_default::<EgressLift<_>>().install(EgressRoute {
-                strategy: ReplicaEgress(replica_id),
-                route: replica_route.clone(),
-                state: socket.clone(),
-            })),
+        ser().lift_default::<EgressLift<_>>().install(EgressRoute {
+            strategy: ReplicaEgress(replica_id),
+            route: replica_route.clone(),
+            state: socket.clone(),
+        }),
         neat_tokio::time::Control::default(),
     );
 
-    let client_ingress = Lift(de(), TransportLift)
-        .install(Closure(|(_, message)| ToReplica::Request(message)).install(replica_wire.state()));
+    let client_ingress = Lift(de::<neat_pbft::Request>(), TransportLift)
+        .install(Closure(|(_, message)| message).install(request_wire.state()));
     let client_ingress = spawn(async move { client_socket.start(client_ingress).await });
-    let ingress = Lift(de(), TransportLift).install(
-        Closure(|(_, message)| message).install(Verify::new(&replica_route, replica_wire.state())),
-    );
+    let ingress = Lift(de(), TransportLift).install(Closure(|(_, message)| message).install(
+        Verify::new(&replica_route).install_filtered(
+            Closure(|(message, signature)| (message, signature)).install(replica_wire.state()),
+        ),
+    ));
     let ingress = spawn(async move { socket.start(ingress).await });
 
+    let mut request_drive = Drive::from(request_wire);
     let mut drive = Drive::from(replica_wire);
     let shutdown = ctrl_c();
     tokio::pin!(shutdown);
     loop {
         select! {
+            message = request_drive.recv() => replica.update(message.expect("no active shutdown")),
             message = drive.recv() => replica.update(message.expect("no active shutdown")),
             timeout = replica.timeout.recv() => replica.update(timeout),
             result = &mut shutdown => break result.unwrap(),

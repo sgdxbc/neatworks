@@ -1,6 +1,6 @@
 use std::net::SocketAddr;
 
-use neat_core::{actor::State, message::Transport};
+use neat_core::{message::Transport, State};
 use tokio::{
     io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, BufStream},
     net::{TcpListener, TcpSocket, TcpStream},

@@ -1,6 +1,6 @@
 use std::{net::SocketAddr, sync::Arc};
 
-use neat_core::{actor, message::Transport, State};
+use neat_core::{message::Transport, State};
 use tokio::{net::UdpSocket, spawn};
 
 // any better name?
@@ -21,7 +21,7 @@ impl Socket {
     }
 }
 
-impl actor::State<Transport<Vec<u8>>> for Socket {
+impl State<Transport<Vec<u8>>> for Socket {
     fn update(&mut self, message: Transport<Vec<u8>>) {
         let (target, buf) = message;
         let socket = self.0.clone();
