@@ -68,6 +68,8 @@ impl<T> State<Reset> for Sleeper<T> {
     }
 }
 
+// because both consuming and producing `Timeout<T>` tightly couples with the
+// `sleepers` state, it should be better to not split `Control` into two parts
 #[derive(Debug)]
 pub struct Control<T> {
     wake: (UnboundedSender<T>, UnboundedReceiver<T>),
@@ -121,7 +123,7 @@ impl<T> Control<T> {
                 .1
                 .recv()
                 .await
-                .expect("control sender not dropped");
+                .expect("control own sender cannot be dropped");
             if self.sleepers.remove(&timeout).is_some() {
                 return timeout;
             }

@@ -94,4 +94,4 @@
   tasks:
   - name: Interrupt
     ansible.builtin.command: pkill -INT --full neat-unreplicated
-    ignore_errors: True
+    ignore_errors: True  # TCP/TLS replica will actively shutdown when all clients disconnected

@@ -12,31 +12,33 @@ use tokio::{
 // alternative design: unreliable tx over actively retry/back propogation
 
 #[derive(Debug)]
-pub struct GeneralConnection<S, D, T> {
-    pub stream: T,
+pub struct GeneralConnection<T, S, D> {
     pub remote_addr: SocketAddr,
+    pub stream: T,
+    egress: (Option<UnboundedSender<Vec<u8>>>, UnboundedReceiver<Vec<u8>>),
+
     pub state: S,
     pub disconnected: D,
-    egress: (UnboundedSender<Vec<u8>>, UnboundedReceiver<Vec<u8>>),
 }
 
-pub type Connection<S, D> = GeneralConnection<S, D, BufStream<TcpStream>>;
+pub type Connection<S, D> = GeneralConnection<BufStream<TcpStream>, S, D>;
 
 #[derive(Debug, Clone)]
 pub struct ConnectionOut(UnboundedSender<Vec<u8>>);
 
-impl<S, D, T> GeneralConnection<S, D, T> {
+impl<T, S, D> GeneralConnection<T, S, D> {
     pub fn new(stream: T, remote_addr: SocketAddr, state: S, disconnected: D) -> Self {
+        let egress = unbounded_channel();
         Self {
             stream,
             remote_addr,
             state,
             disconnected,
-            egress: unbounded_channel(),
+            egress: (Some(egress.0), egress.1),
         }
     }
 
-    pub fn replace_stream<U>(self, stream: U) -> (GeneralConnection<S, D, U>, T) {
+    pub fn replace_stream<U>(self, stream: U) -> (GeneralConnection<U, S, D>, T) {
         (
             GeneralConnection {
                 stream,
@@ -69,39 +71,53 @@ impl<S, D> Connection<S, D> {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct Disconnected(SocketAddr);
 
-impl<S, D, T> GeneralConnection<S, D, T> {
+impl<T, S, D> GeneralConnection<T, S, D> {
     pub fn out_state(&self) -> ConnectionOut {
-        ConnectionOut(self.egress.0.clone())
+        ConnectionOut(self.egress.0.clone().unwrap())
     }
 
     pub async fn start(&mut self)
     where
-        S: for<'m> State<Transport<&'m [u8]>>,
-        D: State<Disconnected>,
         // require Unpin or pin it locally?
         T: AsyncRead + AsyncWrite + Unpin,
+        S: for<'m> State<Transport<&'m [u8]>>,
+        D: State<Disconnected>,
     {
+        // this should make sense even when `start` is called multiple times
+        // revise this if actually it is not
+        // also, rethink about whether we should allow `start` to be called
+        // multiple times
+        drop(self.egress.0.take());
         let mut buf = vec![0; 65536]; //
+        let mut local_closed = false;
         loop {
             select! {
                 len = self.stream.read_u32() => {
                     let Ok(len) = len else {
-                        //
+                        // broken connection
                         break;
                     };
                     if self.stream.read_exact(&mut buf[..len as _]).await.is_err() {
-                        //
+                        // broken connection
                         break;
                     }
                     self.state.update((self.remote_addr, &buf[..len as _]));
                 }
-                message = self.egress.1.recv() => {
-                    let message = message.unwrap(); //
+                message = self.egress.1.recv(), if !local_closed => {
+                    let Some(message) = message else {
+                        // all message producers dropped
+                        local_closed = true;
+                        // do not break here because there could still be
+                        // incoming messages that user is waiting for
+                        // if needed, add a active closing interface (that is
+                        // more graceful than drop the Connection)
+                        continue;
+                    };
                     if self.stream.write_u32(message.len() as _).await.is_err()
                         || self.stream.write_all(&message).await.is_err()
                         || self.stream.flush().await.is_err()
                     {
-                        //
+                        // broken connection
                         break;
                     }
                 }

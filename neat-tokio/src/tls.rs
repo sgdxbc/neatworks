@@ -60,7 +60,7 @@ fn server_config() -> ServerConfig {
         .unwrap()
 }
 
-pub type Connection<S, D> = crate::tcp::GeneralConnection<S, D, TlsStream<TcpStream>>;
+pub type Connection<S, D> = crate::tcp::GeneralConnection<TlsStream<TcpStream>, S, D>;
 pub type ConnectionOut = crate::tcp::ConnectionOut;
 
 #[derive(Clone)]
