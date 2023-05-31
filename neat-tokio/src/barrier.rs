@@ -15,17 +15,19 @@ where
     M: Serialize + DeserializeOwned + Send + 'static,
 {
     let message_wire = Wire::default();
-    let mut connection = crate::tcp::Connection::connect(
-        addr,
-        service,
-        de().lift_default::<TransportLift>()
-            .install(Closure(|(_, message)| message).install(message_wire.state())),
-        Wire::default().state(),
-    )
-    .await;
+    let mut connection = crate::tcp::Connection::connect(addr, service).await;
     let mut dispatch = Dispatch::default();
     dispatch.insert_state(connection.remote_addr, connection.out_state());
-    let connection = spawn(async move { connection.start().await });
+    let state = message_wire.state();
+    let connection = spawn(async move {
+        connection
+            .start(
+                de().lift_default::<TransportLift>()
+                    .install(Closure(|(_, message)| message).install(state)),
+                Wire::default().state(),
+            )
+            .await
+    });
 
     ser()
         .lift_default::<TransportLift>()
@@ -43,20 +45,22 @@ where
 {
     let app_wire = Wire::default();
     let finished = Wire::default();
-    let disconnected = Wire::default();
 
     let listener = crate::tcp::Listener::bind(addr);
     let mut dispatch = Dispatch::default();
     let mut connections = Vec::new();
     for _ in 0..count {
-        let mut connection = listener
-            .accept(
-                Lift(de::<M>(), TransportLift).install(app_wire.state()),
-                disconnected.state(),
-            )
-            .await;
+        let mut connection = listener.accept().await;
         dispatch.insert_state(connection.remote_addr, connection.out_state());
-        connections.push(spawn(async move { connection.start().await }));
+        let state = app_wire.state();
+        connections.push(spawn(async move {
+            connection
+                .start(
+                    Lift(de::<M>(), TransportLift).install(state),
+                    Wire::default().state(),
+                )
+                .await
+        }));
     }
     let app = Service::new(
         Lift(ser(), TransportLift).install(Closure(From::from).install(dispatch)),

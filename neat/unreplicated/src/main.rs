@@ -158,18 +158,20 @@ async fn run_clients_tcp(
         let client_addr = route.lookup_addr(client_id);
         let client_wire = Wire::default();
 
-        let mut connection = neat_tokio::tcp::Connection::connect(
-            client_addr,
-            replica_addr,
-            Lift(de(), TransportLift).install(
-                Closure(|(_, message)| Message::Handle(message)).install(client_wire.state()),
-            ),
-            Wire::default().state(),
-        )
-        .await;
+        let mut connection = neat_tokio::tcp::Connection::connect(client_addr, replica_addr).await;
         let mut dispatch = Dispatch::default();
         dispatch.insert_state(replica_addr, connection.out_state());
-        connections.push(spawn(async move { connection.start().await }));
+        let client_state = client_wire.state();
+        connections.push(spawn(async move {
+            connection
+                .start(
+                    Lift(de(), TransportLift).install(
+                        Closure(|(_, message)| Message::Handle(message)).install(client_state),
+                    ),
+                    Wire::default().state(),
+                )
+                .await
+        }));
 
         let workload = Workload {
             latencies: Default::default(),
@@ -219,20 +221,22 @@ async fn run_clients_tcp(
 
 async fn run_replica_tcp(_cli: Cli, route: ClientTable, replica_addr: SocketAddr) {
     let replica_wire = Wire::default();
-    let disconnected = Wire::default();
 
     let listener = neat_tokio::tcp::Listener::bind(replica_addr);
     let mut dispatch = Dispatch::default();
     for _ in 0..route.len() {
-        let mut connection = listener
-            .accept(
-                Lift(de(), TransportLift)
-                    .install(Closure(|(_, message)| message).install(replica_wire.state())),
-                disconnected.state(),
-            )
-            .await;
+        let replica_state = replica_wire.state();
+        let mut connection = listener.accept().await;
         dispatch.insert_state(connection.remote_addr, connection.out_state());
-        spawn(async move { connection.start().await });
+        spawn(async move {
+            connection
+                .start(
+                    Lift(de(), TransportLift)
+                        .install(Closure(|(_, message)| message).install(replica_state)),
+                    Wire::default().state(),
+                )
+                .await
+        });
     }
 
     let app = Null.lift(AppLift::default()).install_filtered(
@@ -242,12 +246,7 @@ async fn run_replica_tcp(_cli: Cli, route: ClientTable, replica_addr: SocketAddr
     let mut replica = Replica::new(app);
 
     let mut replica_drive = Drive::from(replica_wire);
-    let shutdown = ctrl_c();
-    tokio::pin!(shutdown);
-    select! {
-        _ = replica_drive.run(&mut replica) => {}  // gracefully shutdown
-        result = &mut shutdown => result.unwrap(),
-    }
+    replica_drive.run(&mut replica).await; // gracefully shutdown
 
     let _replica = replica;
 }
@@ -267,21 +266,23 @@ async fn run_clients_tls(
         let client_addr = route.lookup_addr(client_id);
         let client_wire = Wire::default();
 
-        let connection = neat_tokio::tcp::Connection::connect(
-            client_addr,
-            replica_addr,
-            Lift(de(), TransportLift).install(
-                Closure(|(_, message)| Message::Handle(message)).install(client_wire.state()),
-            ),
-            Wire::default().state(),
-        )
-        .await;
+        let connection = neat_tokio::tcp::Connection::connect(client_addr, replica_addr).await;
         let mut connection = neat_tokio::tls::Connector::default()
             .upgrade_client(connection)
             .await;
         let mut dispatch = Dispatch::default();
         dispatch.insert_state(replica_addr, connection.out_state());
-        connections.push(spawn(async move { connection.start().await }));
+        let client_state = client_wire.state();
+        connections.push(spawn(async move {
+            connection
+                .start(
+                    Lift(de(), TransportLift).install(
+                        Closure(|(_, message)| Message::Handle(message)).install(client_state),
+                    ),
+                    Wire::default().state(),
+                )
+                .await
+        }));
 
         let workload = Workload {
             latencies: Default::default(),
@@ -331,22 +332,24 @@ async fn run_clients_tls(
 
 async fn run_replica_tls(_cli: Cli, route: ClientTable, replica_addr: SocketAddr) {
     let replica_wire = Wire::default();
-    let disconnected = Wire::default();
 
     let listener = neat_tokio::tcp::Listener::bind(replica_addr);
     let acceptor = neat_tokio::tls::Acceptor::default();
     let mut dispatch = Dispatch::default();
     for _ in 0..route.len() {
-        let connection = listener
-            .accept(
-                Lift(de(), TransportLift)
-                    .install(Closure(|(_, message)| message).install(replica_wire.state())),
-                disconnected.state(),
-            )
-            .await;
+        let connection = listener.accept().await;
         let mut connection = acceptor.upgrade_server(connection).await;
         dispatch.insert_state(connection.remote_addr, connection.out_state());
-        spawn(async move { connection.start().await });
+        let replica_state = replica_wire.state();
+        spawn(async move {
+            connection
+                .start(
+                    Lift(de(), TransportLift)
+                        .install(Closure(|(_, message)| message).install(replica_state)),
+                    Wire::default().state(),
+                )
+                .await
+        });
     }
 
     let app = Null.lift(AppLift::default()).install_filtered(
@@ -356,12 +359,7 @@ async fn run_replica_tls(_cli: Cli, route: ClientTable, replica_addr: SocketAddr
     let mut replica = Replica::new(app);
 
     let mut replica_drive = Drive::from(replica_wire);
-    let shutdown = ctrl_c();
-    tokio::pin!(shutdown);
-    select! {
-        _ = replica_drive.run(&mut replica) => {}  // gracefully shutdown
-        result = &mut shutdown => result.unwrap(),
-    }
+    replica_drive.run(&mut replica).await; // gracefully shutdown
 
     let _replica = replica;
 }

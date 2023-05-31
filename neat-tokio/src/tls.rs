@@ -60,7 +60,7 @@ fn server_config() -> ServerConfig {
         .unwrap()
 }
 
-pub type Connection<S, D> = crate::tcp::GeneralConnection<TlsStream<TcpStream>, S, D>;
+pub type Connection = crate::tcp::GeneralConnection<TlsStream<TcpStream>>;
 pub type ConnectionOut = crate::tcp::ConnectionOut;
 
 #[derive(Clone)]
@@ -73,10 +73,7 @@ impl Default for Connector {
 }
 
 impl Connector {
-    pub async fn upgrade_client<S, D>(
-        &self,
-        connection: crate::tcp::Connection<S, D>,
-    ) -> Connection<S, D> {
+    pub async fn upgrade_client(&self, connection: crate::tcp::Connection) -> Connection {
         let (connection, stream) = connection.replace_stream(());
         let stream = self
             .0
@@ -100,10 +97,7 @@ impl Default for Acceptor {
 }
 
 impl Acceptor {
-    pub async fn upgrade_server<S, D>(
-        &self,
-        connection: crate::tcp::Connection<S, D>,
-    ) -> Connection<S, D> {
+    pub async fn upgrade_server(&self, connection: crate::tcp::Connection) -> Connection {
         let (connection, stream) = connection.replace_stream(());
         let stream = self.0.accept(stream.into_inner()).await.unwrap();
         connection.replace_stream(Server(stream)).0
