@@ -15,7 +15,7 @@ use tokio::{
 pub struct GeneralConnection<T> {
     pub remote_addr: SocketAddr,
     pub stream: T,
-    egress: (Option<UnboundedSender<Vec<u8>>>, UnboundedReceiver<Vec<u8>>),
+    egress: (UnboundedSender<Vec<u8>>, UnboundedReceiver<Vec<u8>>),
 }
 
 pub type Connection = GeneralConnection<BufStream<TcpStream>>;
@@ -25,11 +25,10 @@ pub struct ConnectionOut(UnboundedSender<Vec<u8>>);
 
 impl<T> GeneralConnection<T> {
     pub fn new(stream: T, remote_addr: SocketAddr) -> Self {
-        let egress = unbounded_channel();
         Self {
             stream,
             remote_addr,
-            egress: (Some(egress.0), egress.1),
+            egress: unbounded_channel(),
         }
     }
 
@@ -57,11 +56,11 @@ impl Connection {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct Disconnected(SocketAddr);
+pub struct Disconnected(pub SocketAddr);
 
 impl<T> GeneralConnection<T> {
     pub fn out_state(&self) -> ConnectionOut {
-        ConnectionOut(self.egress.0.clone().unwrap())
+        ConnectionOut(self.egress.0.clone())
     }
 
     pub async fn start(
@@ -72,13 +71,7 @@ impl<T> GeneralConnection<T> {
         // require Unpin or pin it locally?
         T: AsyncRead + AsyncWrite + Unpin,
     {
-        // this should make sense even when `start` is called multiple times
-        // revise this if actually it is not
-        // also, rethink about whether we should allow `start` to be called
-        // multiple times
-        drop(self.egress.0.take());
         let mut buf = vec![0; 65536]; //
-        let mut local_closed = false;
         loop {
             select! {
                 len = self.stream.read_u32() => {
@@ -92,17 +85,8 @@ impl<T> GeneralConnection<T> {
                     }
                     state.update((self.remote_addr, &buf[..len as _]));
                 }
-                message = self.egress.1.recv(), if !local_closed => {
-                    let Some(message) = message else {
-                        // all message producers dropped
-                        local_closed = true;
-                        // do not break here because there could still be
-                        // incoming messages that user is waiting for
-                        // if needed, add a active closing interface (that is
-                        // more graceful than drop the Connection, which
-                        // probably involves aborting task)
-                        continue;
-                    };
+                message = self.egress.1.recv() => {
+                    let message = message.expect("owned egress sender not dropped");
                     if self.stream.write_u32(message.len() as _).await.is_err()
                         || self.stream.write_all(&message).await.is_err()
                         || self.stream.flush().await.is_err()

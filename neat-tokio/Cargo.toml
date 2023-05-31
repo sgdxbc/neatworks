@@ -13,3 +13,4 @@ rustls-pemfile = "1.0.2"
 tokio-rustls = "0.24.0"
 neat-bincode = { version = "0.1.0", path = "../neat-bincode" }
 serde = "1.0.163"
+async-trait = "0.1.68"
