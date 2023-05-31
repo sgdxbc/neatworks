@@ -128,12 +128,17 @@ pub struct Replica<U, E, T> {
     prepared: HashMap<OpNum, HashMap<u8, (Prepare, Signature)>>,
     committed: HashMap<OpNum, HashMap<u8, Commit>>,
     execute_number: OpNum,
+    buffered_requests: Vec<Request>,
+    working_count: usize,
 
     sign: Sign, // this could be yet another generic, but i hardly see another alternative option for the type
     pub upcall: U,
     pub egress: E,
     pub timeout: T,
 }
+
+const MAX_WORKING_COUNT: usize = 10; //
+const MAX_BATCH_SIZE: usize = 100; //
 
 impl<U, E, T> Replica<U, E, T> {
     pub fn new(id: u8, n: usize, f: usize, sign: Sign, upcall: U, egress: E, timeout: T) -> Self {
@@ -158,6 +163,8 @@ impl<U, E, T> Replica<U, E, T> {
             prepared: Default::default(),
             committed: Default::default(),
             execute_number: 0,
+            buffered_requests: Default::default(),
+            working_count: 0,
             sign,
             upcall,
             egress,
@@ -299,29 +306,13 @@ where
             _ => {}
         }
 
-        self.op_num += 1;
         self.client_table
             .insert(message.client_id, message.request_num);
-
-        // TODO batching
-        let requests = vec![message];
-        let pre_prepare = PrePrepare {
-            view_num: self.view_num,
-            op_num: self.op_num,
-            digest: digest(&requests),
-        };
-        let (FromReplica::PrePrepare(pre_prepare, requests), signature) = self
-            .sign
-            .update(FromReplica::PrePrepare(pre_prepare, requests)) else {
-            unimplemented!()
-        };
-        self.pre_prepares
-            .insert(self.op_num, (pre_prepare, requests, signature));
-        self.send_pre_prepare(self.op_num);
-        self.timeout
-            .update(Set(TimeoutEvent::Prepare(self.view_num, self.op_num)));
-        assert!(!self.prepared.contains_key(&self.op_num));
-        assert!(!self.committed.contains_key(&self.op_num));
+        self.buffered_requests.push(message);
+        // no need to loop here right?
+        if self.working_count < MAX_WORKING_COUNT {
+            self.close_batch();
+        }
     }
 
     fn handle_pre_prepare(
@@ -421,6 +412,34 @@ where
         self.insert_commit(message);
     }
 
+    fn close_batch(&mut self) {
+        assert!(!self.buffered_requests.is_empty());
+        self.op_num += 1;
+        self.working_count += 1;
+        let requests = Vec::from_iter(
+            self.buffered_requests
+                .drain(..usize::min(self.buffered_requests.len(), MAX_BATCH_SIZE)),
+        );
+
+        let pre_prepare = PrePrepare {
+            view_num: self.view_num,
+            op_num: self.op_num,
+            digest: digest(&requests),
+        };
+        let (FromReplica::PrePrepare(pre_prepare, requests), signature) = self
+            .sign
+            .update(FromReplica::PrePrepare(pre_prepare, requests)) else {
+            unimplemented!()
+        };
+        self.pre_prepares
+            .insert(self.op_num, (pre_prepare, requests, signature));
+        self.send_pre_prepare(self.op_num);
+        self.timeout
+            .update(Set(TimeoutEvent::Prepare(self.view_num, self.op_num)));
+        assert!(!self.prepared.contains_key(&self.op_num));
+        assert!(!self.committed.contains_key(&self.op_num));
+    }
+
     fn send_pre_prepare(&mut self, op_num: OpNum) {
         assert_eq!(self.id, self.primary_id());
         let (pre_prepare, requests, signature) = self.pre_prepares[&op_num].clone();
@@ -474,6 +493,16 @@ where
             self.timeout
                 .update(Unset(TimeoutEvent::Commit(self.view_num, op_num)));
             self.execute();
+
+            if self.id == self.primary_id() {
+                // assert that only one more batch is allowed, or only one more
+                // batch can be filled, so no need to loop right?
+                if !self.buffered_requests.is_empty() {
+                    self.close_batch()
+                } else {
+                    self.working_count -= 1;
+                }
+            }
         }
     }
 
@@ -495,6 +524,18 @@ where
 
             self.log.push(requests);
             self.execute_number += 1;
+        }
+    }
+}
+
+impl<U, E, T> Drop for Replica<U, E, T> {
+    fn drop(&mut self) {
+        if self.id == self.primary_id() {
+            let sum_len = self.log.iter().map(Vec::len).sum::<usize>();
+            println!(
+                "average batch size {}",
+                sum_len as f64 / self.log.len() as f64
+            );
         }
     }
 }
