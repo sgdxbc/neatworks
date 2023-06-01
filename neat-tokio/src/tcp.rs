@@ -10,6 +10,12 @@ use tokio::{
 
 // alternative design: select tx/rx in the same loop over split into two loops
 // alternative design: unreliable tx over actively retry/back propogation
+//
+// currently there's no way to actively close (the local half of) a connection
+// except drop the `GeneralConnection` instance (probably after aborting the
+// `GeneralConnection::start` calling task)
+// this should not be a problem, since `TcpStream` does not provide any closing
+// interface so there's nothing much i can do anyway
 
 #[derive(Debug)]
 pub struct GeneralConnection<T> {

@@ -154,6 +154,21 @@ impl Control {
         ControlOut(self.egress.0.clone())
     }
 
+    // the `start` here looks very monolithic, and seems should be decomposed
+    // into several smaller units. the main two reasons not doing that:
+    // 1. although it is in a similiar form, we are not looking at 3 impl of
+    // `State<M>` with different `M` multiplexing together. the reason is that
+    // handling these messages requires asynchronous steps, but `State::update`
+    // is intended to be a synchronous interface.
+    // 2. even if writing custom asynchronous functions, the channels still
+    // cannot be extracted from `Control` (at least `remove`), because its
+    // sender is passed into every `connection`'s working loop. since `remove`
+    // has to be here, making `insert` also be here should be the least
+    // confusing choice. then we don't have much to change
+    //
+    // if eventually this need to be revised, hope that comes soon since i am
+    // planning to make this an essential facility...
+
     pub async fn start<T, S>(&mut self, state: T)
     where
         T: for<'m> State<Transport<&'m [u8]>> + SharedClone,
