@@ -1,4 +1,4 @@
-use std::{collections::HashMap, net::SocketAddr};
+use std::{collections::HashMap, net::SocketAddr, sync::Arc};
 
 use neat_core::{actor::SharedClone, message::Transport, State};
 use tokio::{
@@ -43,48 +43,23 @@ impl State<Disconnected> for Remove {
     }
 }
 
-#[async_trait::async_trait]
 pub trait Strategy<S> {
-    async fn on_inbound(&mut self, control: &mut Control, connection: tcp::Connection, state: S)
-    where
-        Self: Sized;
-
-    async fn on_outbound(&mut self, control: &mut Control, connection: tcp::Connection, state: S)
-    where
-        Self: Sized;
+    fn start_inbound(&mut self, connection: tcp::Connection, state: S, remove: Remove);
+    fn start_outbound(&mut self, connection: tcp::Connection, state: S, remove: Remove);
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default)]
 pub struct Tcp;
 
-#[async_trait::async_trait]
 impl<S> Strategy<S> for Tcp
 where
     S: for<'m> State<Transport<&'m [u8]>> + Send + 'static,
 {
-    async fn on_inbound(&mut self, control: &mut Control, mut connection: tcp::Connection, state: S)
-    where
-        Self: Sized,
-    {
-        control
-            .connections
-            .insert(connection.remote_addr, connection.out_state());
-        let remove = Remove(control.remove.0.clone());
+    fn start_inbound(&mut self, mut connection: tcp::Connection, state: S, remove: Remove) {
         spawn(async move { connection.start(state, remove).await });
     }
 
-    async fn on_outbound(
-        &mut self,
-        control: &mut Control,
-        mut connection: tcp::Connection,
-        state: S,
-    ) where
-        Self: Sized,
-    {
-        control
-            .connections
-            .insert(connection.remote_addr, connection.out_state());
-        let remove = Remove(control.remove.0.clone());
+    fn start_outbound(&mut self, mut connection: tcp::Connection, state: S, remove: Remove) {
         spawn(async move { connection.start(state, remove).await });
     }
 }
@@ -95,33 +70,30 @@ pub struct Tls {
     acceptor: Acceptor,
 }
 
-#[async_trait::async_trait]
-impl<S> Strategy<S> for Tls
+impl<S> Strategy<S> for Arc<Tls>
 where
     S: for<'m> State<Transport<&'m [u8]>> + Send + 'static,
 {
-    async fn on_inbound(&mut self, control: &mut Control, connection: tcp::Connection, state: S)
-    where
-        Self: Sized,
-    {
-        let mut connection = self.acceptor.upgrade_server(connection).await;
-        control
-            .connections
-            .insert(connection.remote_addr, connection.out_state());
-        let remove = Remove(control.remove.0.clone());
-        spawn(async move { connection.start(state, remove).await });
+    fn start_inbound(&mut self, connection: tcp::Connection, state: S, remove: Remove) {
+        let s = self.clone();
+        spawn(async move {
+            s.acceptor
+                .upgrade_server(connection)
+                .await
+                .start(state, remove)
+                .await
+        });
     }
 
-    async fn on_outbound(&mut self, control: &mut Control, connection: tcp::Connection, state: S)
-    where
-        Self: Sized,
-    {
-        let mut connection = self.connector.upgrade_client(connection).await;
-        control
-            .connections
-            .insert(connection.remote_addr, connection.out_state());
-        let remove = Remove(control.remove.0.clone());
-        spawn(async move { connection.start(state, remove).await });
+    fn start_outbound(&mut self, connection: tcp::Connection, state: S, remove: Remove) {
+        let s = self.clone();
+        spawn(async move {
+            s.connector
+                .upgrade_client(connection)
+                .await
+                .start(state, remove)
+                .await
+        });
     }
 }
 
@@ -186,7 +158,10 @@ impl Control {
                 }
                 connection = self.insert.1.recv() => {
                     let connection = connection.expect("owned insert sender not dropped");
-                    strategy.on_inbound(self, connection, state.clone()).await;
+                    self
+                        .connections
+                        .insert(connection.remote_addr, connection.out_state());
+                    strategy.start_inbound(connection, state.clone(), Remove(self.remove.0.clone()));
                 }
                 disconnected = self.remove.1.recv() => {
                     let Disconnected(remote) = disconnected.expect("owned remove sender not dropped");
@@ -206,7 +181,9 @@ impl Control {
         let connection =
             // TODO allow assign local address
             tcp::Connection::connect(SocketAddr::from(([0, 0, 0, 0], 0)), remote).await;
-        strategy.on_outbound(self, connection, state).await;
+        self.connections
+            .insert(connection.remote_addr, connection.out_state());
+        strategy.start_outbound(connection, state, Remove(self.remove.0.clone()));
     }
 }
 

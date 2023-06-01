@@ -2,6 +2,13 @@ use flume::{Receiver, Sender};
 
 use crate::{actor::SharedClone, State};
 
+// design alternative: a separated `neat-flume` wrapping crate
+// not doing that for now because this feature is too essential to stay out of
+// the core crate; actor model can never live without message inbox
+// also since flume channel supports both sync and async operations, it probably
+// can be (and will be) used by every downstream binary implementation whatever
+// runtime it is based on
+
 #[derive(Debug)]
 pub struct Wire<M> {
     sender: Sender<M>,
