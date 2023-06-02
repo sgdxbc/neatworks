@@ -108,6 +108,7 @@ where
             return;
         }
         //
-        self.do_request();
+        // self.do_request();
+        panic!("request timeout")
     }
 }

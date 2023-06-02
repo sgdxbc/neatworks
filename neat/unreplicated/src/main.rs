@@ -1,6 +1,5 @@
 use std::{
     net::{IpAddr, SocketAddr},
-    sync::atomic::{AtomicUsize, Ordering::SeqCst},
     time::{Duration, Instant},
 };
 
@@ -14,10 +13,6 @@ use neat_core::{
 };
 use neat_tokio::barrier::{provide_barrier, use_barrier};
 use neat_unreplicated::{client, AppLift, Client, Replica};
-use nix::{
-    sched::{sched_setaffinity, CpuSet},
-    unistd::Pid,
-};
 use rand::{rngs::StdRng, SeedableRng};
 use serde::{Deserialize, Serialize};
 use tokio::{
@@ -468,6 +463,8 @@ fn main() {
         });
     } else {
         fn set_affinity() {
+            use nix::{sched::sched_setaffinity, sched::CpuSet, unistd::Pid};
+            use std::sync::atomic::{AtomicUsize, Ordering::SeqCst};
             static CPU_ID: AtomicUsize = AtomicUsize::new(0);
             let mut cpu_set = CpuSet::new();
             cpu_set.set(CPU_ID.fetch_add(1, SeqCst)).unwrap();

@@ -39,6 +39,10 @@ pub trait FunctionalState<Input> {
     }
 }
 
+// dropping phamton `I` and `O` in the type parameters (where `F: FnMut(I) -> O`)
+// because it seems like Rust cannot encode `for<'a>` into type, so when impl
+// `FunctionalState<I>`, actually it only impl "for some `'a`" instead of "for
+// all `'a`"
 #[derive(Debug, Clone)]
 pub struct Closure<F>(pub F);
 
@@ -60,8 +64,10 @@ where
     }
 }
 
-// cannot have `F: Fn(I) -> O` bound here any more
-// is this ok?
+// after removing `I` and `O` type parameters from `Closure`, cannot have
+// `F: Fn(I) -> O` bound here any more
+// so currently this impl dangerously covers `FnMut(I) -> O` as well
+// How to express "`F` impl `Fn` for some input and output" then?
 impl<F> SharedClone for Closure<F> where F: Clone {}
 
 pub trait App {

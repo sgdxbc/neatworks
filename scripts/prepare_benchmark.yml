@@ -42,6 +42,8 @@
     become: True
 
   - name: Set CPU frequency governor
-    ansible.builtin.command:
-      cpupower frequency-set --governor performance
+    # ansible.builtin.command:
+    #   cpupower frequency-set --governor performance
+    ansible.builtin.shell:
+      for i in $(seq 0 63); do echo performance | tee /sys/devices/system/cpu/cpu${i}/cpufreq/scaling_governor; done
     become: True

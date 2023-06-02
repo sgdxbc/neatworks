@@ -138,7 +138,7 @@ pub struct Replica<U, E, T> {
 }
 
 const MAX_WORKING_COUNT: usize = 10; //
-const MAX_BATCH_SIZE: usize = 100; //
+const MAX_BATCH_SIZE: usize = 200; //
 
 impl<U, E, T> Replica<U, E, T> {
     pub fn new(id: u8, n: usize, f: usize, sign: Sign, upcall: U, egress: E, timeout: T) -> Self {

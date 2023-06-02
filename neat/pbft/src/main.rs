@@ -19,7 +19,7 @@ use neat_tokio::{
 use rand::{rngs::StdRng, SeedableRng};
 use serde::{Deserialize, Serialize};
 use tokio::{
-    select,
+    runtime, select,
     signal::ctrl_c,
     spawn,
     time::{sleep, timeout},
@@ -89,9 +89,7 @@ async fn run_clients(cli: Cli, route: ClientTable, replica_route: ReplicaTable) 
             let mut client_drive = Drive::from(client_wire);
 
             //
-            while Instant::now() - now
-                < Duration::from_secs(cli.client_sec) + Duration::from_millis(100)
-            {
+            while Instant::now() - now < Duration::from_secs(cli.client_sec) {
                 let result =
                     timeout(Duration::from_millis(100), client_drive.run(&mut client)).await;
                 assert!(result.is_err());
@@ -105,9 +103,9 @@ async fn run_clients(cli: Cli, route: ClientTable, replica_route: ReplicaTable) 
 
     sleep(Duration::from_secs(cli.client_sec)).await;
 
-    for ingress in ingress_tasks {
-        ingress.abort();
-    }
+    // for ingress in ingress_tasks {
+    //     ingress.abort();
+    // }
     for (index, client) in (client_index..client_index + cli.client_count).zip(clients) {
         let client = client.await.unwrap(); //
         let mut latencies = client.result.latencies;
@@ -138,9 +136,13 @@ async fn run_replica(cli: Cli, route: ClientTable, replica_route: ReplicaTable) 
                 .install(Lift(ser(), TransportLift).install(client_socket.clone())),
         );
 
+    #[allow(clippy::int_plus_one)]
+    {
+        assert!(replica_route.len() >= 2 * cli.faulty_count + 1);
+    }
     let mut replica = Replica::new(
         replica_id,
-        replica_route.len(),
+        3 * cli.faulty_count + 1, //
         cli.faulty_count,
         Sign::new(&replica_route, replica_id),
         app,
@@ -210,16 +212,17 @@ struct Cli {
     replica_id: Option<u8>,
     #[clap(long, default_value_t = 1)]
     faulty_count: usize,
+    #[clap(long, default_value_t = 1)]
+    thread_count: usize,
 }
 
-#[tokio::main]
-async fn main() {
+async fn init() -> Option<(Cli, ClientTable, ReplicaTable)> {
     let cli = Cli::parse();
 
     if cli.barrier_count != 0 {
         provide_barrier::<BarrierUser>(SocketAddr::from(([0, 0, 0, 0], 60000)), cli.barrier_count)
             .await;
-        return;
+        return None;
     }
 
     let user = match (cli.client_index, cli.replica_id) {
@@ -254,10 +257,43 @@ async fn main() {
         }
     }
 
+    Some((cli, route, replica_route))
+}
+
+fn main() {
+    let runtime = runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    let Some((cli, route, replica_route)) = runtime.block_on(init()) else {
+        return;
+    };
     if cli.client_index.is_some() {
-        sleep(Duration::from_millis(100)).await;
-        run_clients(cli, route, replica_route).await;
+        runtime.block_on(async move {
+            sleep(Duration::from_millis(100)).await;
+            run_clients(cli, route, replica_route).await;
+        })
     } else {
-        run_replica(cli, route, replica_route).await;
+        fn set_affinity() {
+            use nix::{sched::sched_setaffinity, sched::CpuSet, unistd::Pid};
+            use std::sync::atomic::{AtomicUsize, Ordering::SeqCst};
+            static CPU_ID: AtomicUsize = AtomicUsize::new(0);
+            let mut cpu_set = CpuSet::new();
+            cpu_set.set(CPU_ID.fetch_add(1, SeqCst)).unwrap();
+            sched_setaffinity(Pid::from_raw(0), &cpu_set).unwrap();
+        }
+        set_affinity();
+
+        if cli.thread_count == 0 {
+            runtime::Builder::new_current_thread().enable_all().build()
+        } else {
+            runtime::Builder::new_multi_thread()
+                .worker_threads(cli.thread_count)
+                .on_thread_start(set_affinity)
+                .enable_all()
+                .build()
+        }
+        .unwrap()
+        .block_on(async move { run_replica(cli, route, replica_route).await })
     }
 }
