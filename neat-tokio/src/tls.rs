@@ -61,7 +61,6 @@ fn server_config() -> ServerConfig {
 }
 
 pub type Connection = crate::tcp::GeneralConnection<TlsStream<TcpStream>>;
-pub type ConnectionOut = crate::tcp::ConnectionOut;
 
 #[derive(Clone)]
 pub struct Connector(pub TlsConnector);

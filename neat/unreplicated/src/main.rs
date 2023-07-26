@@ -9,6 +9,7 @@ use neat_core::{
     app::{Closure, FunctionalState},
     message::TransportLift,
     route::ClientTable,
+    wire::WireState,
     App, Dispatch, Lift, {Drive, State, Wire},
 };
 use neat_tokio::barrier::{provide_barrier, use_barrier};
@@ -152,18 +153,20 @@ async fn run_clients_tcp(
         let client_id = route.identity(index);
         let client_addr = route.lookup_addr(client_id);
         let client_wire = Wire::default();
+        let egress_wire = Wire::default();
 
         let mut connection = neat_tokio::tcp::Connection::connect(client_addr, replica_addr).await;
         let mut dispatch = Dispatch::default();
-        dispatch.insert_state(replica_addr, connection.out_state());
+        dispatch.insert_state(replica_addr, egress_wire.state());
         let client_state = client_wire.state();
         connections.push(spawn(async move {
             connection
                 .start(
+                    Drive::from(egress_wire),
                     Lift(de(), TransportLift).install(
                         Closure(|(_, message)| Message::Handle(message)).install(client_state),
                     ),
-                    Wire::default().state(),
+                    WireState::dangling(),
                 )
                 .await
         }));
@@ -220,12 +223,14 @@ async fn run_replica_tcp(_cli: Cli, route: ClientTable, replica_addr: SocketAddr
     let listener = neat_tokio::tcp::Listener::bind(replica_addr);
     let mut dispatch = Dispatch::default();
     for _ in 0..route.len() {
+        let egress_wire = Wire::default();
         let replica_state = replica_wire.state();
         let mut connection = listener.accept().await;
-        dispatch.insert_state(connection.remote_addr, connection.out_state());
+        dispatch.insert_state(connection.remote_addr, egress_wire.state());
         spawn(async move {
             connection
                 .start(
+                    Drive::from(egress_wire),
                     Lift(de(), TransportLift)
                         .install(Closure(|(_, message)| message).install(replica_state)),
                     Wire::default().state(),
@@ -260,17 +265,19 @@ async fn run_clients_tls(
         let client_id = route.identity(index);
         let client_addr = route.lookup_addr(client_id);
         let client_wire = Wire::default();
+        let egress_wire = Wire::default();
 
         let connection = neat_tokio::tcp::Connection::connect(client_addr, replica_addr).await;
         let mut connection = neat_tokio::tls::Connector::default()
             .upgrade_client(connection)
             .await;
         let mut dispatch = Dispatch::default();
-        dispatch.insert_state(replica_addr, connection.out_state());
+        dispatch.insert_state(replica_addr, egress_wire.state());
         let client_state = client_wire.state();
         connections.push(spawn(async move {
             connection
                 .start(
+                    Drive::from(egress_wire),
                     Lift(de(), TransportLift).install(
                         Closure(|(_, message)| Message::Handle(message)).install(client_state),
                     ),
@@ -334,11 +341,13 @@ async fn run_replica_tls(_cli: Cli, route: ClientTable, replica_addr: SocketAddr
     for _ in 0..route.len() {
         let connection = listener.accept().await;
         let mut connection = acceptor.upgrade_server(connection).await;
-        dispatch.insert_state(connection.remote_addr, connection.out_state());
+        let egress_wire = Wire::default();
+        dispatch.insert_state(connection.remote_addr, egress_wire.state());
         let replica_state = replica_wire.state();
         spawn(async move {
             connection
                 .start(
+                    Drive::from(egress_wire),
                     Lift(de(), TransportLift)
                         .install(Closure(|(_, message)| message).install(replica_state)),
                     Wire::default().state(),

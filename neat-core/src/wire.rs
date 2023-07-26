@@ -41,6 +41,12 @@ impl<M> Default for Wire<M> {
     }
 }
 
+impl<M> WireState<M> {
+    pub fn dangling() -> Self {
+        Wire::default().state()
+    }
+}
+
 #[derive(Debug)]
 pub struct Drive<M>(pub Receiver<M>);
 

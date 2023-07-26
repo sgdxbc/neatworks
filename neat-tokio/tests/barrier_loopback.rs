@@ -5,6 +5,7 @@ use neat_core::{
     app::{Closure, FunctionalState},
     barrier::{Message, Service},
     message::TransportLift,
+    wire::WireState,
     Dispatch, Lift, State, {Drive, Wire},
 };
 
@@ -79,22 +80,24 @@ async fn sync_udp() {
 
 async fn use_barrier_tcp(addr: SocketAddr, service: SocketAddr) -> Message<UserPayload> {
     let message = Wire::<Message<UserPayload>>::default();
+    let egress = Wire::default();
     let mut connection = neat_tokio::tcp::Connection::connect(addr, service).await;
     let local_message = connection.stream.get_ref().local_addr().unwrap().port();
     let mut dispatch = Dispatch::default();
-    dispatch.insert_state(connection.remote_addr, connection.out_state());
+    dispatch.insert_state(connection.remote_addr, egress.state());
     let state = message.state();
     let connection = spawn(async move {
         connection
             .start(
+                Drive::from(egress),
                 Lift(de(), TransportLift).install(Closure(|(_, message)| message).install(state)),
-                Wire::default().state(),
+                WireState::dangling(),
             )
             .await
     });
 
     Lift(ser(), TransportLift)
-        .install(Closure(From::from).install(dispatch))
+        .install(Closure(Into::into).install(dispatch))
         .update((service, local_message));
 
     let mut message = Drive::from(message).recv().await.unwrap();
@@ -111,14 +114,16 @@ async fn provide_barrier_tcp(addr: SocketAddr, count: usize) {
     let mut dispatch = Dispatch::default();
     let mut connections = Vec::new();
     for _ in 0..count {
+        let egress_wire = Wire::default();
         let mut connection = listener.accept().await;
-        dispatch.insert_state(connection.remote_addr, connection.out_state());
+        dispatch.insert_state(connection.remote_addr, egress_wire.state());
         let app_state = app_wire.state();
         connections.push(spawn(async move {
             connection
                 .start(
+                    Drive::from(egress_wire),
                     Lift(de::<UserPayload>(), TransportLift).install(app_state),
-                    Wire::default().state(),
+                    WireState::dangling(),
                 )
                 .await
         }));

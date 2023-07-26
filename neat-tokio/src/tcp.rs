@@ -1,11 +1,10 @@
 use std::net::SocketAddr;
 
-use neat_core::{message::Transport, State};
+use neat_core::{message::Transport, Drive, State};
 use tokio::{
     io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, BufStream},
     net::{TcpListener, TcpSocket, TcpStream},
     select,
-    sync::mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender},
 };
 
 // alternative design: select tx/rx in the same loop over split into two loops
@@ -21,20 +20,15 @@ use tokio::{
 pub struct GeneralConnection<T> {
     pub remote_addr: SocketAddr,
     pub stream: T,
-    egress: (UnboundedSender<Vec<u8>>, UnboundedReceiver<Vec<u8>>),
 }
 
 pub type Connection = GeneralConnection<BufStream<TcpStream>>;
-
-#[derive(Debug, Clone)]
-pub struct ConnectionOut(UnboundedSender<Vec<u8>>);
 
 impl<T> GeneralConnection<T> {
     pub fn new(stream: T, remote_addr: SocketAddr) -> Self {
         Self {
             stream,
             remote_addr,
-            egress: unbounded_channel(),
         }
     }
 
@@ -43,7 +37,6 @@ impl<T> GeneralConnection<T> {
             GeneralConnection {
                 stream,
                 remote_addr: self.remote_addr,
-                egress: self.egress,
             },
             self.stream,
         )
@@ -65,12 +58,9 @@ impl Connection {
 pub struct Disconnected(pub SocketAddr);
 
 impl<T> GeneralConnection<T> {
-    pub fn out_state(&self) -> ConnectionOut {
-        ConnectionOut(self.egress.0.clone())
-    }
-
     pub async fn start(
         &mut self,
+        mut drive: Drive<Vec<u8>>,
         mut state: impl for<'m> State<Transport<&'m [u8]>>,
         mut disconnected: impl State<Disconnected>,
     ) where
@@ -78,6 +68,7 @@ impl<T> GeneralConnection<T> {
         T: AsyncRead + AsyncWrite + Unpin,
     {
         let mut buf = vec![0; 65536]; //
+        let mut local_close = false;
         loop {
             select! {
                 len = self.stream.read_u32() => {
@@ -91,8 +82,11 @@ impl<T> GeneralConnection<T> {
                     }
                     state.update((self.remote_addr, &buf[..len as _]));
                 }
-                message = self.egress.1.recv() => {
-                    let message = message.expect("owned egress sender not dropped");
+                message = drive.recv(), if !local_close => {
+                    let Some(message) = message else {
+                        local_close = true;
+                        continue;
+                    };
                     if self.stream.write_u32(message.len() as _).await.is_err()
                         || self.stream.write_all(&message).await.is_err()
                         || self.stream.flush().await.is_err()
@@ -104,14 +98,6 @@ impl<T> GeneralConnection<T> {
             }
         }
         disconnected.update(Disconnected(self.remote_addr))
-    }
-}
-
-impl State<Vec<u8>> for ConnectionOut {
-    fn update(&mut self, message: Vec<u8>) {
-        if self.0.send(message).is_err() {
-            //
-        }
     }
 }
 

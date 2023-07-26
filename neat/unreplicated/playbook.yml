@@ -6,7 +6,7 @@
   tasks:
   - name: Set fact
     ansible.builtin.set_fact:
-      work_dir: /local/cowsay
+      work_dir: /local/cowsay/neat
       client_count: 1
       # blank for UDP & 1 worker thread
       flags:

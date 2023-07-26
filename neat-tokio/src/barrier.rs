@@ -5,6 +5,7 @@ use neat_core::{
     app::{Closure, FunctionalState},
     barrier::{Message, Service},
     message::TransportLift,
+    wire::WireState,
     Dispatch, Lift, {Drive, State, Wire},
 };
 use serde::{de::DeserializeOwned, Serialize};
@@ -15,13 +16,15 @@ where
     M: Serialize + DeserializeOwned + Send + 'static,
 {
     let message_wire = Wire::default();
+    let egress_wire = Wire::default();
     let mut connection = crate::tcp::Connection::connect(addr, service).await;
     let mut dispatch = Dispatch::default();
-    dispatch.insert_state(connection.remote_addr, connection.out_state());
+    dispatch.insert_state(connection.remote_addr, egress_wire.state());
     let state = message_wire.state();
     let connection = spawn(async move {
         connection
             .start(
+                Drive::from(egress_wire),
                 de().lift_default::<TransportLift>()
                     .install(Closure(|(_, message)| message).install(state)),
                 Wire::default().state(),
@@ -50,14 +53,16 @@ where
     let mut dispatch = Dispatch::default();
     let mut connections = Vec::new();
     for _ in 0..count {
+        let egress_wire = Wire::default();
         let mut connection = listener.accept().await;
-        dispatch.insert_state(connection.remote_addr, connection.out_state());
+        dispatch.insert_state(connection.remote_addr, egress_wire.state());
         let state = app_wire.state();
         connections.push(spawn(async move {
             connection
                 .start(
+                    Drive::from(egress_wire),
                     Lift(de::<M>(), TransportLift).install(state),
-                    Wire::default().state(),
+                    WireState::dangling(),
                 )
                 .await
         }));

@@ -9,7 +9,7 @@ use tokio::{
 };
 
 #[derive(Debug)]
-pub struct Sleeper<T> {
+struct Sleeper<T> {
     reset: UnboundedSender<()>,
     task: JoinHandle<()>,
     _timeout: PhantomData<T>,
@@ -58,7 +58,7 @@ impl<T> Drop for Sleeper<T> {
     }
 }
 
-pub struct Reset;
+struct Reset;
 
 impl<T> State<Reset> for Sleeper<T> {
     fn update(&mut self, Reset: Reset) {

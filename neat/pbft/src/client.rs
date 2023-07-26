@@ -107,7 +107,6 @@ where
             self.ticked = true;
             return;
         }
-        //
         // self.do_request();
         panic!("request timeout")
     }
