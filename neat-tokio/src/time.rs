@@ -1,6 +1,6 @@
 use std::{collections::HashMap, hash::Hash, marker::PhantomData, time::Duration};
 
-use neat_core::{message::Timeout, State};
+use neat_core::{message::Timeout, Drive, State};
 use tokio::{
     select, spawn,
     sync::mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender},
@@ -126,6 +126,26 @@ impl<T> Control<T> {
                 .expect("control own sender cannot be dropped");
             if self.sleepers.remove(&timeout).is_some() {
                 return timeout;
+            }
+        }
+    }
+
+    pub async fn start(&mut self, mut drive: Drive<Timeout<T>>, mut state: impl State<T>)
+    where
+        T: Hash + Eq + Clone + Send + 'static,
+    {
+        loop {
+            select! {
+                // ensure that only deliver timeout when control queue is empty
+                // but still, use `start` with caution
+                biased;
+                message = drive.recv() => {
+                    let Some(message) = message else {
+                        break;
+                    };
+                    self.update(message)
+                }
+                timeout = self.recv() => state.update(timeout),
             }
         }
     }

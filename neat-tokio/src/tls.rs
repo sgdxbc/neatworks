@@ -73,16 +73,18 @@ impl Default for Connector {
 
 impl Connector {
     pub async fn upgrade_client(&self, connection: crate::tcp::Connection) -> Connection {
-        let (connection, stream) = connection.replace_stream(());
         let stream = self
             .0
             .connect(
                 ServerName::try_from("neat.test").unwrap(),
-                stream.into_inner(),
+                connection.stream.into_inner(),
             )
             .await
             .unwrap();
-        connection.replace_stream(Client(stream)).0
+        Connection {
+            stream: Client(stream),
+            remote_addr: connection.remote_addr,
+        }
     }
 }
 
@@ -97,9 +99,11 @@ impl Default for Acceptor {
 
 impl Acceptor {
     pub async fn upgrade_server(&self, connection: crate::tcp::Connection) -> Connection {
-        let (connection, stream) = connection.replace_stream(());
-        let stream = self.0.accept(stream.into_inner()).await.unwrap();
-        connection.replace_stream(Server(stream)).0
+        let stream = self.0.accept(connection.stream.into_inner()).await.unwrap();
+        Connection {
+            stream: Server(stream),
+            remote_addr: connection.remote_addr,
+        }
     }
 }
 

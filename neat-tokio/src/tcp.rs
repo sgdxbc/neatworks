@@ -31,16 +31,6 @@ impl<T> GeneralConnection<T> {
             remote_addr,
         }
     }
-
-    pub fn replace_stream<U>(self, stream: U) -> (GeneralConnection<U>, T) {
-        (
-            GeneralConnection {
-                stream,
-                remote_addr: self.remote_addr,
-            },
-            self.stream,
-        )
-    }
 }
 
 impl Connection {
