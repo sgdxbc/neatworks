@@ -1,4 +1,4 @@
-use neat_core::actor;
+use neat_core::actor::State;
 
 use crate::{Reply, Request};
 
@@ -33,10 +33,10 @@ impl<O, R> Client<O, R> {
     }
 }
 
-impl<O, R> actor::State<Message> for Client<O, R>
+impl<O, R> State<Message> for Client<O, R>
 where
-    O: actor::State<Request>,
-    R: actor::State<Result>,
+    O: State<Request>,
+    R: State<Result>,
 {
     fn update(&mut self, message: Message) {
         match message {
@@ -49,8 +49,8 @@ where
 
 impl<O, R> Client<O, R>
 where
-    O: actor::State<Request>,
-    R: actor::State<Result>,
+    O: State<Request>,
+    R: State<Result>,
 {
     fn invoke(&mut self, op: Vec<u8>) {
         assert!(self.op.is_none());

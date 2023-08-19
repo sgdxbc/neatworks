@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use neat_core::{actor, message::Lift};
+use neat_core::{actor::State, message::Lift};
 
 use crate::{Reply, Request};
 
@@ -22,9 +22,9 @@ impl<U> Replica<U> {
     }
 }
 
-impl<U> actor::State<Request> for Replica<U>
+impl<U> State<Request> for Replica<U>
 where
-    U: actor::State<Upcall>,
+    U: State<Upcall>,
 {
     fn update(&mut self, message: Request) {
         self.op_num += 1;
