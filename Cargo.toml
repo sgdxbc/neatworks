@@ -16,6 +16,7 @@ members = [
 [profile.release]
 # debug = true
 strip = true
+incremental = true
 
 [dependencies]
 axum = "0.6.20"

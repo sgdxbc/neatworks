@@ -1,10 +1,12 @@
+// TODO overhaul with per-setup feature
+
 use std::{
     process::{Command, Stdio},
     thread::{sleep, spawn},
     time::Duration,
 };
 
-#[cfg(not(feature = "aws"))]
+#[cfg(not(feature = "neo-aws"))]
 const HOSTS: &[&str] = &[
     "nsl-node1.d2",
     "nsl-node2.d2",
@@ -12,13 +14,13 @@ const HOSTS: &[&str] = &[
     "nsl-node4.d2",
     "nsl-node10.d2",
 ];
-#[cfg(not(feature = "aws"))]
+#[cfg(not(feature = "neo-aws"))]
 const LOCALHOST: &str = "nsl-node1.d2";
-#[cfg(feature = "aws")]
+#[cfg(feature = "neo-aws")]
 const LOCALHOST: &str = "localhost";
-#[cfg(not(feature = "aws"))]
+#[cfg(not(feature = "neo-aws"))]
 const WORK_DIR: &str = "/local/cowsay/artifacts";
-#[cfg(feature = "aws")]
+#[cfg(feature = "neo-aws")]
 const WORK_DIR: &str = "/home/ubuntu";
 const PROGRAM: &str = "permissioned-blockchain";
 
@@ -29,9 +31,9 @@ fn main() {
         .unwrap();
     assert!(status.success());
 
-    #[cfg(not(feature = "aws"))]
+    #[cfg(not(feature = "neo-aws"))]
     let hosts = Vec::from_iter(HOSTS.iter().map(ToString::to_string));
-    #[cfg(feature = "aws")]
+    #[cfg(feature = "neo-aws")]
     let hosts = {
         let output = neo_aws::Output::new_terraform();
         [&*output.client_hosts, &*output.replica_hosts].concat()

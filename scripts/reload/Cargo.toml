@@ -4,7 +4,7 @@ version = "0.1.0"
 edition = "2021"
 
 [features]
-aws = ["neo-aws"]
+neo-nsl = []
 
 [dependencies]
 neo-aws = { version = "0.1.0", path = "../neo-aws", optional = true }

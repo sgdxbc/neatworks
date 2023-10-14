@@ -461,8 +461,9 @@ async fn run(
                 .get(format!("http://{client_host}:9999/benchmark"))
                 .send()
                 .await
+                .unwrap()
+                .error_for_status()
                 .unwrap();
-            assert!(response.status().is_success());
             if let Some(stats) = response.json::<Option<BenchmarkStats>>().await.unwrap() {
                 println!("* {stats:?}");
                 assert_ne!(stats.throughput, 0.);
@@ -504,13 +505,14 @@ async fn host_session(
     let host = host.into();
     // println!("{host}");
     let endpoint = format!("http://{host}:9999");
-    let response = client
+    client
         .post(format!("{endpoint}/task"))
         .json(&task)
         .send()
         .await
+        .unwrap()
+        .error_for_status()
         .unwrap();
-    assert!(response.status().is_success());
     loop {
         select! {
             _ = sleep(Duration::from_secs(1)) => {}
@@ -520,8 +522,9 @@ async fn host_session(
             .get(format!("{endpoint}/panic"))
             .send()
             .await
+            .unwrap()
+            .error_for_status()
             .unwrap();
-        assert!(response.status().is_success());
         if response.json::<bool>().await.unwrap() {
             println!("! {host} panic");
             panic.store(true, SeqCst);
@@ -530,11 +533,12 @@ async fn host_session(
         }
     }
     if !panic.load(SeqCst) {
-        let response = client
+        client
             .post(format!("{endpoint}/reset"))
             .send()
             .await
+            .unwrap()
+            .error_for_status()
             .unwrap();
-        assert!(response.status().is_success())
     }
 }
