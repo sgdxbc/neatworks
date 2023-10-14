@@ -100,14 +100,6 @@ pub struct Context {
 }
 
 impl Context {
-    pub fn num_faulty(&self) -> usize {
-        self.config.num_faulty
-    }
-
-    pub fn num_replica(&self) -> usize {
-        self.config.num_replica
-    }
-
     pub fn send<M, N>(&self, to: To, message: N)
     where
         M: Sign<N> + Serialize,
@@ -238,10 +230,10 @@ impl Dispatch {
             socket: socket.clone(),
             runtime: self.runtime.clone(),
             source: receiver,
-            signer: Signer {
-                signing_key: self.config.hosts[&receiver].signing_key.clone(),
-                hmac: self.config.hmac.clone(),
-            },
+            signer: Signer::new_standard(
+                self.config.hosts[&receiver].signing_key.clone(),
+                self.config.hmac.clone(),
+            ),
             timer_id: Default::default(),
             event: self.event.0.clone(),
             rdv_event: self.rdv_event.0.clone(),

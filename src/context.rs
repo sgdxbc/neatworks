@@ -6,6 +6,7 @@ use self::{crypto::DigestHash, ordered_multicast::OrderedMulticast};
 
 pub mod crypto;
 pub mod ordered_multicast;
+pub mod simulated;
 pub mod tokio;
 
 pub type ReplicaIndex = u8;
@@ -14,7 +15,7 @@ pub type ClientIndex = u16;
 #[derive(Debug)]
 pub enum Context<M> {
     Tokio(tokio::Context),
-    Phantom(std::marker::PhantomData<M>),
+    Simulated(simulated::Context<M>),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -47,25 +48,25 @@ impl To {
 impl<M> Context<M> {
     pub fn num_faulty(&self) -> usize {
         match self {
-            Self::Tokio(context) => context.num_faulty(),
-            _ => unimplemented!(),
+            Self::Tokio(context) => context.config.num_faulty,
+            Self::Simulated(context) => context.num_faulty,
         }
     }
 
     pub fn num_replica(&self) -> usize {
         match self {
-            Self::Tokio(context) => context.num_replica(),
-            _ => unimplemented!(),
+            Self::Tokio(context) => context.config.num_replica,
+            Self::Simulated(context) => context.num_replica,
         }
     }
 
     pub fn send<N>(&mut self, to: To, message: N)
     where
-        M: crypto::Sign<N> + Serialize,
+        M: crypto::Sign<N> + Serialize + Clone,
     {
         match self {
             Self::Tokio(context) => context.send::<M, _>(to, message),
-            _ => unimplemented!(),
+            Self::Simulated(context) => context.send(to, message),
         }
     }
 
@@ -76,7 +77,7 @@ impl<M> Context<M> {
     {
         match self {
             Self::Tokio(context) => context.send_ordered_multicast(message),
-            _ => unimplemented!(),
+            Self::Simulated(_) => todo!(),
         }
     }
 }
@@ -84,19 +85,21 @@ impl<M> Context<M> {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum TimerId {
     Tokio(tokio::TimerId),
+    Simulated(simulated::TimerId),
 }
 
 impl<M> Context<M> {
     pub fn set(&mut self, duration: Duration) -> TimerId {
         match self {
             Self::Tokio(context) => TimerId::Tokio(context.set(duration)),
-            _ => unimplemented!(),
+            Self::Simulated(context) => TimerId::Simulated(context.set(duration)),
         }
     }
 
     pub fn unset(&mut self, id: TimerId) {
         match (self, id) {
             (Self::Tokio(context), TimerId::Tokio(id)) => context.unset(id),
+            (Self::Simulated(context), TimerId::Simulated(id)) => context.unset(id),
             _ => unimplemented!(),
         }
     }

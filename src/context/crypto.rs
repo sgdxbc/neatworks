@@ -30,6 +30,8 @@ impl<M> std::ops::Deref for Signed<M> {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Signature {
     Plain,
+    SimulatedPrivate,
+    SimulatedPublic,
     K256(k256::ecdsa::Signature),
     Hmac([u8; 32]),
 }
@@ -38,7 +40,7 @@ impl<M: DigestHash> DigestHash for Signed<M> {
     fn hash(&self, hasher: &mut impl std::hash::Hasher) {
         self.inner.hash(hasher);
         match &self.signature {
-            Signature::Plain => {} // TODO
+            Signature::Plain | Signature::SimulatedPrivate | Signature::SimulatedPublic => {} // TODO
             Signature::K256(signature) => hasher.write(&signature.to_bytes()),
             Signature::Hmac(codes) => hasher.write(codes),
         }
@@ -119,13 +121,51 @@ impl Hasher {
 }
 
 #[derive(Debug, Clone)]
-pub struct Signer {
-    pub signing_key: Option<SigningKey>,
-    pub hmac: Hmac<Sha256>,
+pub enum Signer {
+    Simulated,
+    Standard(Box<StandardSigner>),
+}
+
+#[derive(Debug, Clone)]
+pub struct StandardSigner {
+    signing_key: Option<SigningKey>,
+    hmac: Hmac<Sha256>,
 }
 
 impl Signer {
+    pub fn new_standard(signing_key: Option<SigningKey>, hmac: Hmac<Sha256>) -> Self {
+        Self::Standard(Box::new(StandardSigner { signing_key, hmac }))
+    }
+
     pub fn sign_public<M>(&self, message: M) -> Signed<M>
+    where
+        M: DigestHash,
+    {
+        match self {
+            Self::Simulated => Signed {
+                inner: message,
+                signature: Signature::SimulatedPublic,
+            },
+            Self::Standard(signer) => signer.sign_public(message),
+        }
+    }
+
+    pub fn sign_private<M>(&self, message: M) -> Signed<M>
+    where
+        M: DigestHash,
+    {
+        match self {
+            Self::Simulated => Signed {
+                inner: message,
+                signature: Signature::SimulatedPrivate,
+            },
+            Self::Standard(signer) => signer.sign_private(message),
+        }
+    }
+}
+
+impl StandardSigner {
+    fn sign_public<M>(&self, message: M) -> Signed<M>
     where
         M: DigestHash,
     {
@@ -136,7 +176,7 @@ impl Signer {
         }
     }
 
-    pub fn sign_private<M>(&self, message: M) -> Signed<M>
+    fn sign_private<M>(&self, message: M) -> Signed<M>
     where
         M: DigestHash,
     {
@@ -150,11 +190,12 @@ impl Signer {
 #[derive(Debug, Clone)]
 pub enum Verifier {
     Nop,
-    Standard(Box<VerifierStandard>),
+    Simulated,
+    Standard(Box<StandardVerifier>),
 }
 
 #[derive(Debug, Clone)]
-pub struct VerifierStandard {
+pub struct StandardVerifier {
     verifying_keys: HashMap<ReplicaIndex, VerifyingKey>,
     hmac: Hmac<Sha256>,
     variant: Arc<Variant>,
@@ -190,7 +231,7 @@ impl Verifier {
                 }
             })
             .collect();
-        Self::Standard(Box::new(VerifierStandard {
+        Self::Standard(Box::new(StandardVerifier {
             verifying_keys,
             hmac: config.hmac.clone(),
             variant,
@@ -207,7 +248,8 @@ impl Verifier {
     {
         match (self, &message.signature) {
             (Self::Nop, _) => Ok(()),
-            (Self::Standard(_), Signature::Plain) => unimplemented!(),
+            (Self::Simulated, Signature::SimulatedPrivate | Signature::SimulatedPublic) => Ok(()),
+            (Self::Simulated, _) => unimplemented!(),
             (Self::Standard(verifier), Signature::K256(signature)) => verifier.verifying_keys
                 [&index.into().unwrap()]
                 .verify_digest(Hasher::sha256(&**message), signature)
@@ -221,6 +263,7 @@ impl Verifier {
                 };
                 hmac.verify(code.into()).map_err(|_| Invalid::Private)
             }
+            (Self::Standard(_), _) => unimplemented!(),
         }
     }
 
@@ -230,6 +273,7 @@ impl Verifier {
     {
         match self {
             Self::Nop => Ok(()),
+            Self::Simulated => unimplemented!(),
             Self::Standard(verifier) => verifier.variant.verify(message),
         }
     }
