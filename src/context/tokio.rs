@@ -6,6 +6,8 @@
 use std::{collections::HashMap, net::SocketAddr, sync::Arc, time::Duration};
 
 use bincode::Options;
+use hmac::{Hmac, Mac};
+use k256::{ecdsa::SigningKey, sha2::Sha256};
 use rand::Rng;
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use tokio::{net::UdpSocket, runtime::Handle};
@@ -16,8 +18,64 @@ use crate::context::crypto::Verifier;
 use super::{
     crypto::{DigestHash, Sign, Signer, Verify},
     ordered_multicast::{OrderedMulticast, Variant},
-    Config, Host, OrderedMulticastReceivers, Receivers, To,
+    Host, OrderedMulticastReceivers, Receivers, ReplicaIndex, To,
 };
+
+#[derive(Debug, Clone)]
+pub struct Config {
+    pub num_faulty: usize,
+    pub num_replica: usize,
+    pub hosts: HashMap<Host, ConfigHost>,
+    pub remotes: HashMap<SocketAddr, Host>,
+    pub multicast_addr: Option<SocketAddr>,
+    pub hmac: Hmac<Sha256>,
+}
+
+#[derive(Debug, Clone)]
+pub struct ConfigHost {
+    pub addr: SocketAddr,
+    pub signing_key: Option<SigningKey>,
+}
+
+impl Config {
+    pub fn new(addrs: HashMap<Host, SocketAddr>, num_faulty: usize) -> Self {
+        let mut remotes = HashMap::new();
+        let mut hosts = HashMap::new();
+        let mut num_replica = 0;
+        for (&host, &addr) in &addrs {
+            remotes.insert(addr, host);
+            let signing_key;
+            match host {
+                Host::Client(_) => signing_key = None,
+                Host::Replica(index) => {
+                    signing_key = Some(Self::k256(index));
+                    num_replica += 1;
+                }
+                Host::Multicast | Host::UnkownMulticastSource => unimplemented!(),
+            };
+            hosts.insert(host, ConfigHost { addr, signing_key });
+        }
+        assert_eq!(remotes.len(), addrs.len());
+        assert!(num_faulty * 3 < num_replica);
+        Self {
+            num_faulty,
+            num_replica,
+            hosts,
+            remotes,
+            multicast_addr: None,
+            // simplified symmetrical keys setup
+            // also reduce client-side overhead a little bit by only need to sign once for broadcast
+            hmac: Hmac::new_from_slice("shared".as_bytes()).unwrap(),
+        }
+    }
+
+    fn k256(index: ReplicaIndex) -> SigningKey {
+        let k = format!("replica-{index}");
+        let mut buf = [0; 32];
+        buf[..k.as_bytes().len()].copy_from_slice(k.as_bytes());
+        SigningKey::from_slice(&buf).unwrap()
+    }
+}
 
 #[derive(Debug, Clone)]
 enum Event {
@@ -42,6 +100,14 @@ pub struct Context {
 }
 
 impl Context {
+    pub fn num_faulty(&self) -> usize {
+        self.config.num_faulty
+    }
+
+    pub fn num_replica(&self) -> usize {
+        self.config.num_replica
+    }
+
     pub fn send<M, N>(&self, to: To, message: N)
     where
         M: Sign<N> + Serialize,
@@ -316,7 +382,7 @@ impl Dispatch {
                             .remotes
                             .get(&remote)
                             .copied()
-                            .unwrap_or(Host::UnkownMulticastSender),
+                            .unwrap_or(Host::UnkownMulticastSource),
                         buf[..len].to_vec(),
                     ))
                     .unwrap()

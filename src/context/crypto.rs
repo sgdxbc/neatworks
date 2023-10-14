@@ -10,7 +10,7 @@ use serde::{Deserialize, Serialize};
 
 use super::{
     ordered_multicast::{OrderedMulticast, Variant},
-    Config, Host, ReplicaIndex,
+    Host, ReplicaIndex,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -175,7 +175,7 @@ impl std::fmt::Display for Invalid {
 impl std::error::Error for Invalid {}
 
 impl Verifier {
-    pub fn new_standard(config: &Config, variant: Arc<Variant>) -> Self {
+    pub fn new_standard(config: &crate::context::tokio::Config, variant: Arc<Variant>) -> Self {
         let verifying_keys = config
             .hosts
             .iter()

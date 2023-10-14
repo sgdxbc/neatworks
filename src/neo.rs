@@ -141,7 +141,7 @@ impl crate::Client for Client {
                 ) == (message.epoch_num, message.seq_num, &message.result)
             })
             .count()
-            >= shared.context.config().num_replica - shared.context.config().num_faulty
+            >= shared.context.num_replica() - shared.context.num_faulty()
         {
             shared.resend_timer.unset(&mut shared.context);
             let invoke = shared.invoke.take().unwrap();
@@ -176,7 +176,7 @@ pub struct Replica {
 impl Replica {
     pub fn new(context: Context<Message>, index: ReplicaIndex, app: App, confirm: bool) -> Self {
         let remote_confirmed_nums = if confirm {
-            (0..context.config().num_replica)
+            (0..context.num_replica())
                 .map(|index| (index as ReplicaIndex, 0))
                 .collect()
         } else {
@@ -450,7 +450,7 @@ impl Replica {
     fn do_update_confirm_num(&mut self) {
         let mut confirmed_nums = Vec::from_iter(self.remote_confirmed_nums.values().copied());
         confirmed_nums.sort_unstable();
-        let new_confirmed_num = confirmed_nums[self.context.config().num_faulty];
+        let new_confirmed_num = confirmed_nums[self.context.num_faulty()];
         assert!(new_confirmed_num >= self.confirmed_num);
         // println!("* confirmed {} -> {new_confirmed_num}", self.confirmed_num);
         for op_num in self.confirmed_num + 1..=new_confirmed_num {

@@ -131,8 +131,8 @@ impl crate::Client for Client {
                 (reply.block_digest, &reply.result) == (message.block_digest, &message.result)
             })
             .count();
-        assert!(num_match <= shared.context.config().num_faulty + 1);
-        if num_match == shared.context.config().num_faulty + 1 {
+        assert!(num_match <= shared.context.num_faulty() + 1);
+        if num_match == shared.context.num_faulty() + 1 {
             shared.resend_timer.unset(&mut shared.context);
             let invoke = shared.invoke.take().unwrap();
             let _op = invoke.op;
@@ -209,7 +209,7 @@ impl Receivers for Replica {
 
 impl Replica {
     fn primary_index(&self) -> ReplicaIndex {
-        (self.view_num as usize % self.context.config().num_replica) as _
+        (self.view_num as usize % self.context.num_replica()) as _
     }
 
     fn handle_request(&mut self, _remote: Host, message: Signed<Request>) {
@@ -286,13 +286,11 @@ impl Replica {
         {
             assert!(
                 prepare_certificate.len() + 1
-                    <= self.context.config().num_replica - self.context.config().num_faulty
+                    <= self.context.num_replica() - self.context.num_faulty()
             );
         }
         // corner case handling: receive `PrePrepare` after sufficient `Prepare`s
-        if prepare_certificate.len() + 1
-            == self.context.config().num_replica - self.context.config().num_faulty
-        {
+        if prepare_certificate.len() + 1 == self.context.num_replica() - self.context.num_faulty() {
             if prepare.replica_index != self.index {
                 return;
             }
@@ -301,7 +299,7 @@ impl Replica {
         }
         if self.pre_prepares.contains_key(&block_digest)
             && prepare_certificate.len() + 1
-                == self.context.config().num_replica - self.context.config().num_faulty
+                == self.context.num_replica() - self.context.num_faulty()
         {
             let commit = Commit {
                 view_num: self.view_num,
@@ -316,19 +314,12 @@ impl Replica {
     fn insert_commit(&mut self, commit: Signed<Commit>) {
         let block_digest = commit.block_digest;
         let commit_certificate = self.commit_certificates.entry(block_digest).or_default();
-        assert!(
-            commit_certificate.len()
-                <= self.context.config().num_replica - self.context.config().num_faulty
-        );
-        if commit_certificate.len()
-            == self.context.config().num_replica - self.context.config().num_faulty
-        {
+        assert!(commit_certificate.len() <= self.context.num_replica() - self.context.num_faulty());
+        if commit_certificate.len() == self.context.num_replica() - self.context.num_faulty() {
             return;
         }
         commit_certificate.insert(commit.replica_index, commit);
-        if commit_certificate.len()
-            >= self.context.config().num_replica - self.context.config().num_faulty
-        {
+        if commit_certificate.len() >= self.context.num_replica() - self.context.num_faulty() {
             self.do_execute(block_digest);
         }
     }

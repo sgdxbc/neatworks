@@ -122,8 +122,8 @@ impl crate::Client for Client {
                 (reply.block_digest, &reply.result) == (message.block_digest, &message.result)
             })
             .count();
-        assert!(num_match <= shared.context.config().num_faulty + 1);
-        if num_match == shared.context.config().num_faulty + 1 {
+        assert!(num_match <= shared.context.num_faulty() + 1);
+        if num_match == shared.context.num_faulty() + 1 {
             shared.resend_timer.unset(&mut shared.context);
             let invoke = shared.invoke.take().unwrap();
             let _op = invoke.op;
@@ -196,7 +196,7 @@ impl Receivers for Replica {
 
 impl Replica {
     fn primary_index(&self) -> ReplicaIndex {
-        (self.view_num as usize % self.context.config().num_replica) as _
+        (self.view_num as usize % self.context.num_replica()) as _
     }
 
     fn handle_request(&mut self, _remote: Host, message: Signed<Request>) {
@@ -256,7 +256,7 @@ impl Replica {
     fn insert_commit(&mut self, commit: Signed<Commit>) {
         let block_digest = commit.block_digest;
         let commit_certificate = self.commit_certificates.entry(block_digest).or_default();
-        if commit_certificate.len() == self.context.config().num_faulty + 1 {
+        if commit_certificate.len() == self.context.num_faulty() + 1 {
             if commit.replica_index != self.index {
                 return;
             }
@@ -264,7 +264,7 @@ impl Replica {
             commit_certificate.insert(commit.replica_index, commit);
         }
         if self.prepares.contains_key(&block_digest)
-            && commit_certificate.len() == self.context.config().num_faulty + 1
+            && commit_certificate.len() == self.context.num_faulty() + 1
         {
             self.do_execute(block_digest);
         }

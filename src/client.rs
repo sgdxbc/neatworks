@@ -16,7 +16,7 @@ use crate::{
         crypto::Verify,
         ordered_multicast::Variant,
         tokio::{Dispatch, DispatchHandle},
-        ClientIndex, Config, Host,
+        ClientIndex, Host,
     },
     Context,
 };
@@ -171,7 +171,7 @@ impl<C> Benchmark<C> {
 
 #[derive(Debug)]
 pub struct RunBenchmarkConfig {
-    pub dispatch_config: Config,
+    pub dispatch_config: crate::context::tokio::Config,
     pub offset: usize,
     pub num_group: usize,
     pub num_client: usize,

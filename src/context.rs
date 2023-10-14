@@ -1,7 +1,5 @@
-use std::{collections::HashMap, net::SocketAddr, time::Duration};
+use std::time::Duration;
 
-use hmac::{Hmac, Mac};
-use k256::{ecdsa::SigningKey, sha2::Sha256};
 use serde::Serialize;
 
 use self::{crypto::DigestHash, ordered_multicast::OrderedMulticast};
@@ -23,8 +21,8 @@ pub enum Context<M> {
 pub enum Host {
     Client(ClientIndex),
     Replica(ReplicaIndex),
-    Multicast,
-    UnkownMulticastSender,
+    Multicast,             // as receiver
+    UnkownMulticastSource, // as remote
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -47,9 +45,16 @@ impl To {
 }
 
 impl<M> Context<M> {
-    pub fn config(&self) -> &Config {
+    pub fn num_faulty(&self) -> usize {
         match self {
-            Self::Tokio(context) => &context.config,
+            Self::Tokio(context) => context.num_faulty(),
+            _ => unimplemented!(),
+        }
+    }
+
+    pub fn num_replica(&self) -> usize {
+        match self {
+            Self::Tokio(context) => context.num_replica(),
             _ => unimplemented!(),
         }
     }
@@ -71,13 +76,6 @@ impl<M> Context<M> {
     {
         match self {
             Self::Tokio(context) => context.send_ordered_multicast(message),
-            _ => unimplemented!(),
-        }
-    }
-
-    pub fn idle_hint(&self) -> bool {
-        match self {
-            Self::Tokio(context) => context.idle_hint(),
             _ => unimplemented!(),
         }
     }
@@ -124,60 +122,4 @@ where
     Self: Receivers,
 {
     type Message;
-}
-
-#[derive(Debug, Clone)]
-pub struct Config {
-    pub num_faulty: usize,
-    pub num_replica: usize,
-    pub hosts: HashMap<Host, ConfigHost>,
-    pub remotes: HashMap<SocketAddr, Host>,
-    pub multicast_addr: Option<SocketAddr>,
-    pub hmac: Hmac<Sha256>,
-}
-
-#[derive(Debug, Clone)]
-pub struct ConfigHost {
-    pub addr: SocketAddr,
-    pub signing_key: Option<SigningKey>,
-}
-
-impl Config {
-    pub fn new(addrs: HashMap<Host, SocketAddr>, num_faulty: usize) -> Self {
-        let mut remotes = HashMap::new();
-        let mut hosts = HashMap::new();
-        let mut num_replica = 0;
-        for (&host, &addr) in &addrs {
-            remotes.insert(addr, host);
-            let signing_key;
-            match host {
-                Host::Client(_) => signing_key = None,
-                Host::Replica(index) => {
-                    signing_key = Some(Self::k256(index));
-                    num_replica += 1;
-                }
-                Host::Multicast | Host::UnkownMulticastSender => unimplemented!(),
-            };
-            hosts.insert(host, ConfigHost { addr, signing_key });
-        }
-        assert_eq!(remotes.len(), addrs.len());
-        assert!(num_faulty * 3 < num_replica);
-        Self {
-            num_faulty,
-            num_replica,
-            hosts,
-            remotes,
-            multicast_addr: None,
-            // simplified symmetrical keys setup
-            // also reduce client-side overhead a little bit by only need to sign once for broadcast
-            hmac: Hmac::new_from_slice("shared".as_bytes()).unwrap(),
-        }
-    }
-
-    fn k256(index: ReplicaIndex) -> SigningKey {
-        let k = format!("replica-{index}");
-        let mut buf = [0; 32];
-        buf[..k.as_bytes().len()].copy_from_slice(k.as_bytes());
-        SigningKey::from_slice(&buf).unwrap()
-    }
 }

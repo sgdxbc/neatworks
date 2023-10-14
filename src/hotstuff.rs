@@ -120,8 +120,8 @@ impl crate::Client for Client {
             .values()
             .filter(|reply| reply.result == message.result)
             .count();
-        assert!(num_match <= shared.context.config().num_faulty + 1);
-        if num_match == shared.context.config().num_faulty + 1 {
+        assert!(num_match <= shared.context.num_faulty() + 1);
+        if num_match == shared.context.num_faulty() + 1 {
             shared.resend_timer.unset(&mut shared.context);
             let invoke = shared.invoke.take().unwrap();
             let _op = invoke.op;
@@ -258,11 +258,11 @@ impl Replica {
         let block_digest = message.block_digest;
         assert!(self.generics.contains_key(&block_digest)); // TODO
         let votes = self.votes.entry(block_digest).or_default();
-        if votes.len() == self.context.config().num_replica - self.context.config().num_faulty {
+        if votes.len() == self.context.num_replica() - self.context.num_faulty() {
             return;
         }
         votes.insert(message.replica_index, message);
-        if votes.len() == self.context.config().num_replica - self.context.config().num_faulty {
+        if votes.len() == self.context.num_replica() - self.context.num_faulty() {
             self.do_update_certified(&block_digest)
         }
     }

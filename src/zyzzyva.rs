@@ -143,14 +143,13 @@ impl crate::Client for Client {
                         == (message.block.digest(), &message.results)
                 });
                 let num_match = matched_responses.clone().count();
-                if num_match == shared.context.config().num_replica {
+                if num_match == shared.context.num_replica() {
                     shared.resend_timer.unset(&mut shared.context);
                     let invoke = shared.invoke.take().unwrap();
                     let _op = invoke.op;
                     invoke.consume.apply(result.clone())
                 } else if self.byzantine
-                    && num_match
-                        == shared.context.config().num_replica - shared.context.config().num_faulty
+                    && num_match == shared.context.num_replica() - shared.context.num_faulty()
                 {
                     invoke.commit_digest = Some(message.block.digest());
                     invoke.commit_result = Some(result.clone());
@@ -171,7 +170,7 @@ impl crate::Client for Client {
                 }
                 invoke.local_commits.insert(message.replica_index);
                 if invoke.local_commits.len()
-                    == shared.context.config().num_replica - shared.context.config().num_faulty
+                    == shared.context.num_replica() - shared.context.num_faulty()
                 {
                     shared.resend_timer.unset(&mut shared.context);
                     let invoke = shared.invoke.take().unwrap();
@@ -251,7 +250,7 @@ impl Receivers for Replica {
 
 impl Replica {
     fn primary_index(&self) -> ReplicaIndex {
-        (self.view_num as usize % self.context.config().num_replica) as _
+        (self.view_num as usize % self.context.num_replica()) as _
     }
 
     fn handle_request(&mut self, _remote: Host, request: Signed<Request>) {

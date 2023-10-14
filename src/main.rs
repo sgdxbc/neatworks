@@ -15,7 +15,11 @@ use permissioned_blockchain::{
     app::{ycsb, Workload},
     client::{run_benchmark, RunBenchmarkConfig},
     common::set_affinity,
-    context::{ordered_multicast::Variant, tokio::Dispatch, Config, Host},
+    context::{
+        ordered_multicast::Variant,
+        tokio::{Config, Dispatch},
+        Host,
+    },
     hotstuff, minbft, neo, pbft, unreplicated, zyzzyva, App,
 };
 use rand::{rngs::StdRng, SeedableRng};
