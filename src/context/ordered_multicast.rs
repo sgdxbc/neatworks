@@ -10,7 +10,7 @@ use serde::{de::DeserializeOwned, Deserialize, Serialize};
 
 use super::{
     crypto::{DigestHash, Hasher, Invalid, Verifier, Verify},
-    Host, Receivers, ReplicaIndex,
+    Addr, Receivers, ReplicaIndex,
 };
 
 pub fn serialize(message: &(impl Serialize + DigestHash)) -> Vec<u8> {
@@ -213,7 +213,7 @@ impl Variant {
 #[derive(Debug)]
 pub enum Delegate<M> {
     Nop(ReplicaIndex),
-    K256(Option<(Host, OrderedMulticast<M>)>),
+    K256(Option<(Addr, OrderedMulticast<M>)>),
 }
 
 impl Variant {
@@ -229,7 +229,7 @@ impl Variant {
 impl<M> Delegate<M> {
     pub fn on_receive<N>(
         &mut self,
-        remote: Host,
+        remote: Addr,
         message: OrderedMulticast<M>,
         receivers: &mut impl Receivers<Message = N>,
         verifier: &Verifier,
@@ -247,7 +247,7 @@ impl<M> Delegate<M> {
                 }
                 let message = into(message);
                 message.verify(verifier).unwrap();
-                receivers.handle(Host::Multicast, remote, message)
+                receivers.handle(Addr::Multicast, remote, message)
             }
             Self::K256(saved) => {
                 let (remote, message) = if !message.verified() {
@@ -275,7 +275,7 @@ impl<M> Delegate<M> {
                 };
                 let message = into(message);
                 message.verify(verifier).unwrap();
-                receivers.handle(Host::Multicast, remote, message)
+                receivers.handle(Addr::Multicast, remote, message)
             }
         }
     }
@@ -292,7 +292,7 @@ impl<M> Delegate<M> {
             if let Some((remote, message)) = saved.take() {
                 let message = into(message);
                 message.verify(verifier).unwrap();
-                receivers.handle(Host::Multicast, remote, message)
+                receivers.handle(Addr::Multicast, remote, message)
             } else {
                 // println!("! no signed ordered multicast buffer")
             }

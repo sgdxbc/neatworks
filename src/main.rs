@@ -1,5 +1,4 @@
 use std::{
-    collections::HashMap,
     mem::replace,
     sync::{Arc, Mutex},
     time::Duration,
@@ -16,9 +15,9 @@ use permissioned_blockchain::{
     client::{run_benchmark, RunBenchmarkConfig},
     common::set_affinity,
     context::{
+        crypto::{Signer, Verifier},
         ordered_multicast::Variant,
         tokio::{Config, Dispatch},
-        Host,
     },
     hotstuff, minbft, neo, pbft, unreplicated, zyzzyva, App,
 };
@@ -44,15 +43,8 @@ enum AppState {
 async fn set_task(State(state): State<Arc<Mutex<AppState>>>, Json(task): Json<Task>) {
     assert!(matches!(*state.lock().unwrap(), AppState::Idle));
 
-    let mut addrs = HashMap::new();
-    for (index, addr) in task.client_addrs.into_iter().enumerate() {
-        addrs.insert(Host::Client(index as _), addr);
-    }
-    for (index, addr) in task.replica_addrs.into_iter().enumerate() {
-        addrs.insert(Host::Replica(index as _), addr);
-    }
-    let mut dispatch_config = Config::new(addrs, task.num_faulty);
-    dispatch_config.multicast_addr = Some(task.multicast_addr);
+    let mut context_config = Config::new(task.client_addrs, task.replica_addrs, task.num_faulty);
+    context_config.multicast_addr = Some(task.multicast_addr);
 
     let mut rng = StdRng::seed_from_u64(task.seed);
     match task.role {
@@ -66,7 +58,7 @@ async fn set_task(State(state): State<Arc<Mutex<AppState>>>, Json(task): Json<Ta
             };
 
             let benchmark_config = RunBenchmarkConfig {
-                dispatch_config,
+                context_config,
                 offset: config.offset,
                 num_group: config.num_group,
                 num_client: config.num_client,
@@ -116,15 +108,15 @@ async fn set_task(State(state): State<Arc<Mutex<AppState>>>, Json(task): Json<Ta
                         .enable_all()
                         .build()
                         .unwrap();
+                    let variant = Arc::new(match &*task.mode {
+                        "neo-hm" => Variant::new_half_sip_hash(replica.index),
+                        "neo-pk" | "neo-bn" => Variant::new_k256(),
+                        _ => Variant::Unreachable,
+                    });
                     let mut dispatch = Dispatch::new(
-                        dispatch_config,
                         runtime.handle().clone(),
-                        true,
-                        match &*task.mode {
-                            "neo-hm" => Variant::new_half_sip_hash(replica.index),
-                            "neo-pk" | "neo-bn" => Variant::new_k256(),
-                            _ => Variant::Unreachable,
-                        },
+                        Verifier::new_standard(context_config.hmac.clone(), variant.clone()),
+                        variant,
                     );
 
                     let handle = dispatch.handle();
@@ -138,11 +130,16 @@ async fn set_task(State(state): State<Arc<Mutex<AppState>>>, Json(task): Json<Ta
                     });
 
                     set_affinity(1);
+                    let addr = context_config.replica_addrs[replica.index as usize];
+                    let signer = Signer::new_standard(
+                        Some(context_config.signing_keys[&addr].clone()),
+                        context_config.hmac.clone(),
+                    );
                     match &*task.mode {
                         "unreplicated" => {
                             assert_eq!(replica.index, 0);
                             let mut replica = unreplicated::Replica::new(
-                                dispatch.register(Host::Replica(0)),
+                                dispatch.register(addr, context_config, signer),
                                 app,
                             );
                             // replica.make_blocks = true;
@@ -150,17 +147,19 @@ async fn set_task(State(state): State<Arc<Mutex<AppState>>>, Json(task): Json<Ta
                         }
                         "neo-hm" | "neo-pk" | "neo-bn" => {
                             let mut replica = neo::Replica::new(
-                                dispatch.register(Host::Replica(replica.index)),
+                                dispatch.register(addr, context_config.clone(), signer),
                                 replica.index,
                                 app,
                                 task.mode == "neo-bn",
                             );
                             dispatch.drop_rate = task.drop_rate;
-                            dispatch.enable_ordered_multicast().run(&mut replica)
+                            dispatch
+                                .enable_ordered_multicast(context_config.multicast_addr.unwrap())
+                                .run(&mut replica)
                         }
                         "pbft" => {
                             let mut replica = pbft::Replica::new(
-                                dispatch.register(Host::Replica(replica.index)),
+                                dispatch.register(addr, context_config, signer),
                                 replica.index,
                                 app,
                             );
@@ -168,7 +167,7 @@ async fn set_task(State(state): State<Arc<Mutex<AppState>>>, Json(task): Json<Ta
                         }
                         "zyzzyva" | "zyzzyva-f" => {
                             let mut replica = zyzzyva::Replica::new(
-                                dispatch.register(Host::Replica(replica.index)),
+                                dispatch.register(addr, context_config, signer),
                                 replica.index,
                                 app,
                             );
@@ -176,7 +175,7 @@ async fn set_task(State(state): State<Arc<Mutex<AppState>>>, Json(task): Json<Ta
                         }
                         "hotstuff" => {
                             let mut replica = hotstuff::Replica::new(
-                                dispatch.register(Host::Replica(replica.index)),
+                                dispatch.register(addr, context_config, signer),
                                 replica.index,
                                 app,
                             );
@@ -184,7 +183,7 @@ async fn set_task(State(state): State<Arc<Mutex<AppState>>>, Json(task): Json<Ta
                         }
                         "minbft" => {
                             let mut replica = minbft::Replica::new(
-                                dispatch.register(Host::Replica(replica.index)),
+                                dispatch.register(addr, context_config, signer),
                                 replica.index,
                                 app,
                             );

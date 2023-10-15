@@ -6,14 +6,21 @@ use std::{
 
 use super::{
     crypto::{Sign, Signer},
-    Host, Receivers, To,
+    ClientIndex, Receivers, ReplicaIndex, To,
 };
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum Addr {
+    Replica(ReplicaIndex),
+    Client(ClientIndex),
+    //
+}
 
 #[derive(Debug, Clone)]
 enum Event<M> {
-    Message(Host, Host, M),
-    LoopbackMessage(Host, M),
-    Timer(Host),
+    Message(Addr, Addr, M),
+    LoopbackMessage(Addr, M),
+    Timer(Addr),
 }
 
 pub type TimerId = u32;
@@ -22,7 +29,7 @@ pub type TimerId = u32;
 pub struct Context<M> {
     pub num_faulty: usize,
     pub num_replica: usize,
-    source: Host,
+    pub source: Addr,
     timeline: Arc<Mutex<Timeline<M>>>,
 }
 
@@ -74,24 +81,46 @@ impl<M> Context<M> {
             )
         }
         match to {
-            To::Host(host) => {
-                timeline.add_event(Duration::ZERO, Event::Message(host, self.source, message))
+            To::Addr(addr) => {
+                let crate::context::Addr::Simulated(addr) = addr else {
+                    unimplemented!()
+                };
+                timeline.add_event(Duration::ZERO, Event::Message(addr, self.source, message))
             }
-            To::Hosts(hosts) => {
-                for host in hosts {
-                    assert_ne!(host, self.source);
+            To::Addrs(addrs) => {
+                for addr in addrs {
+                    let crate::context::Addr::Simulated(addr) = addr else {
+                        unimplemented!()
+                    };
+                    assert_ne!(addr, self.source);
                     timeline.add_event(
                         Duration::ZERO,
-                        Event::Message(host, self.source, message.clone()),
+                        Event::Message(addr, self.source, message.clone()),
                     )
                 }
             }
+            To::Client(index) => timeline.add_event(
+                Duration::ZERO,
+                Event::Message(Addr::Client(index), self.source, message),
+            ),
+            To::Clients(indexes) => {
+                for index in indexes {
+                    timeline.add_event(
+                        Duration::ZERO,
+                        Event::Message(Addr::Client(index), self.source, message.clone()),
+                    )
+                }
+            }
+            To::Replica(index) => timeline.add_event(
+                Duration::ZERO,
+                Event::Message(Addr::Replica(index), self.source, message),
+            ),
             To::AllReplica | To::AllReplicaWithLoopback => {
                 for index in 0..self.num_replica {
-                    if Host::Replica(index as _) != self.source {
+                    if Addr::Replica(index as _) != self.source {
                         timeline.add_event(
                             Duration::ZERO,
-                            Event::Message(Host::Replica(index as _), self.source, message.clone()),
+                            Event::Message(Addr::Replica(index as _), self.source, message.clone()),
                         )
                     }
                 }
@@ -121,7 +150,7 @@ pub struct Dispatch<M> {
 }
 
 impl<M> Dispatch<M> {
-    pub fn register(&self, receiver: Host) -> crate::Context<M> {
+    pub fn register(&self, receiver: Addr) -> crate::Context<M> {
         crate::Context::Simulated(Context {
             num_faulty: self.num_faulty,
             num_replica: self.num_replica,
@@ -137,17 +166,18 @@ impl<M> Dispatch<M> {
         };
         assert!(now >= timeline.now);
         timeline.now = now;
+        use crate::context::Addr::Simulated;
         match event {
             Event::Message(receiver, remote, message) => {
-                receivers.handle(receiver, remote, message)
+                receivers.handle(Simulated(receiver), Simulated(remote), message)
             }
             Event::LoopbackMessage(receiver, message) => {
-                receivers.handle_loopback(receiver, message)
+                receivers.handle_loopback(Simulated(receiver), message)
             }
             Event::Timer(receiver) => {
                 let offset = timeline.timers[&id].duration;
                 timeline.add_timer_event(offset, Event::Timer(receiver));
-                receivers.on_timer(receiver, crate::context::TimerId::Simulated(id))
+                receivers.on_timer(Simulated(receiver), crate::context::TimerId::Simulated(id))
             }
         }
         true

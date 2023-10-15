@@ -11,7 +11,7 @@ use crate::{
     common::{Block, BlockDigest, Chain, Request, Timer},
     context::{
         crypto::{DigestHash, Sign, Signed, Verify},
-        ClientIndex, Host, Receivers, ReplicaIndex, To,
+        Addr, ClientIndex, Receivers, ReplicaIndex, To,
     },
     App, Context,
 };
@@ -216,8 +216,8 @@ impl Replica {
 impl Receivers for Replica {
     type Message = Message;
 
-    fn handle(&mut self, receiver: Host, remote: Host, message: Self::Message) {
-        assert_eq!(receiver, Host::Replica(self.index));
+    fn handle(&mut self, receiver: Addr, remote: Addr, message: Self::Message) {
+        assert_eq!(receiver, self.context.addr());
         // println!("{message:?}");
         match message {
             Message::Request(message) => self.handle_request(remote, message),
@@ -227,18 +227,18 @@ impl Receivers for Replica {
         }
     }
 
-    fn on_timer(&mut self, receiver: Host, _: crate::context::TimerId) {
-        assert_eq!(receiver, Host::Replica(self.index));
+    fn on_timer(&mut self, receiver: Addr, _: crate::context::TimerId) {
+        assert_eq!(receiver, self.context.addr());
         todo!()
     }
 
-    fn handle_loopback(&mut self, receiver: Host, message: Self::Message) {
-        assert_eq!(receiver, Host::Replica(self.index));
+    fn handle_loopback(&mut self, receiver: Addr, message: Self::Message) {
+        assert_eq!(receiver, self.context.addr());
         let Message::OrderRequest(message) = message else {
             unimplemented!()
         };
         // is this ok?
-        self.handle_order_request(Host::Replica(self.index), message)
+        self.handle_order_request(self.context.addr(), message)
     }
 
     fn on_pace(&mut self) {
@@ -253,7 +253,7 @@ impl Replica {
         (self.view_num as usize % self.context.num_replica()) as _
     }
 
-    fn handle_request(&mut self, _remote: Host, request: Signed<Request>) {
+    fn handle_request(&mut self, _remote: Addr, request: Signed<Request>) {
         if self.index != self.primary_index() {
             // TODO
             return;
@@ -264,7 +264,7 @@ impl Replica {
         self.requests.push(request.inner);
     }
 
-    fn handle_order_request(&mut self, _remote: Host, order_request: Signed<OrderRequest>) {
+    fn handle_order_request(&mut self, _remote: Addr, order_request: Signed<OrderRequest>) {
         if order_request.view_num < self.view_num {
             return;
         }
@@ -279,13 +279,13 @@ impl Replica {
         self.do_execute(digest);
     }
 
-    fn handle_commit(&mut self, remote: Host, commit: Signed<Commit>) {
+    fn handle_commit(&mut self, remote: Addr, commit: Signed<Commit>) {
         if self.commits.contains_key(&commit.block_digest) {
             let local_commit = LocalCommit {
                 block_digest: commit.block_digest,
                 replica_index: self.index,
             };
-            self.context.send(To::Host(remote), local_commit);
+            self.context.send(To::Addr(remote), local_commit);
             return;
         }
 
@@ -299,7 +299,7 @@ impl Replica {
             replica_index: self.index,
         };
         self.commits.insert(commit.block_digest, commit);
-        self.context.send(To::Host(remote), local_commit)
+        self.context.send(To::Addr(remote), local_commit)
     }
 
     fn do_propose(&mut self) {
@@ -328,12 +328,12 @@ impl Replica {
                 results,
                 replica_index: self.index,
             };
-            let hosts = block
+            let indexes = block
                 .requests
                 .iter()
-                .map(|request| Host::Client(request.client_index))
+                .map(|request| request.client_index)
                 .collect();
-            self.context.send(To::Hosts(hosts), spec_response);
+            self.context.send(To::Clients(indexes), spec_response);
             self.chain.next_execute()
         } {
             block = &self.order_requests[&block_digest].block

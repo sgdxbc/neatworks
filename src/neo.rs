@@ -17,7 +17,7 @@ use crate::{
             OrderedMulticast,
             Signature::{K256Unverified, K256},
         },
-        ClientIndex, Host, OrderedMulticastReceivers, Receivers, ReplicaIndex, To,
+        Addr, ClientIndex, OrderedMulticastReceivers, Receivers, ReplicaIndex, To,
     },
     App, Context,
 };
@@ -223,19 +223,22 @@ impl std::ops::Index<RangeInclusive<u32>> for I<'_> {
 impl Receivers for Replica {
     type Message = Message;
 
-    fn handle(&mut self, receiver: Host, remote: Host, message: Self::Message) {
+    fn handle(&mut self, receiver: Addr, remote: Addr, message: Self::Message) {
         // println!("{message:?}");
-        match (receiver, message) {
-            (Host::Multicast, Message::Request(message)) => self.handle_request(remote, message),
-            (Host::Replica(_), Message::Confirm(message)) => self.handle_confirm(remote, message),
-            (Host::Replica(_), Message::Query(message)) => self.handle_query(remote, message),
-            (Host::Replica(_), Message::QueryOk(message)) => self.handle_query_ok(remote, message),
+        if !matches!(message, Message::Request(_)) {
+            assert_eq!(receiver, self.context.addr())
+        }
+        match message {
+            Message::Request(message) => self.handle_request(remote, message),
+            Message::Confirm(message) => self.handle_confirm(remote, message),
+            Message::Query(message) => self.handle_query(remote, message),
+            Message::QueryOk(message) => self.handle_query_ok(remote, message),
             _ => unimplemented!(),
         }
     }
 
-    fn handle_loopback(&mut self, receiver: Host, message: Self::Message) {
-        assert_eq!(receiver, Host::Replica(self.index));
+    fn handle_loopback(&mut self, receiver: Addr, message: Self::Message) {
+        assert_eq!(receiver, self.context.addr());
         let Message::Confirm(confirm) = message else {
             unreachable!()
         };
@@ -251,7 +254,7 @@ impl Receivers for Replica {
         // }
     }
 
-    fn on_timer(&mut self, _: Host, _: crate::context::TimerId) {
+    fn on_timer(&mut self, _: Addr, _: crate::context::TimerId) {
         unreachable!()
     }
 
@@ -270,7 +273,7 @@ impl Replica {
     // pub const CONFIRM_THRESHOLD: u32 = 100;
     pub const QUERY_THRESHOLD: usize = 100;
 
-    fn handle_request(&mut self, _remote: Host, message: OrderedMulticast<Request>) {
+    fn handle_request(&mut self, _remote: Addr, message: OrderedMulticast<Request>) {
         // Jialin's trick to avoid resetting switch for every run
         let op_num = message.seq_num - *self.seq_num_offset.get_or_insert(message.seq_num) + 1;
         // if message.verified() {
@@ -323,7 +326,7 @@ impl Replica {
         self.verified_num = verified_num
     }
 
-    fn handle_confirm(&mut self, _remote: Host, message: Signed<Confirm>) {
+    fn handle_confirm(&mut self, _remote: Addr, message: Signed<Confirm>) {
         assert!(self.confirm);
         // println!("> confirm #{} {:?}", message.replica_index, message.op_nums);
 
@@ -337,7 +340,7 @@ impl Replica {
         self.do_confirm1(message)
     }
 
-    fn handle_query(&mut self, _remote: Host, message: Signed<Query>) {
+    fn handle_query(&mut self, _remote: Addr, message: Signed<Query>) {
         let mut request = if message.op_num <= self.ordered_num {
             I(&self.requests)[message.op_num].clone()
         } else if let Some(request) = self.reordering_requests.get(&message.op_num) {
@@ -355,10 +358,10 @@ impl Replica {
             request,
         };
         self.context
-            .send(To::replica(message.replica_index), query_ok)
+            .send(To::Replica(message.replica_index), query_ok)
     }
 
-    fn handle_query_ok(&mut self, remote: Host, message: QueryOk) {
+    fn handle_query_ok(&mut self, remote: Addr, message: QueryOk) {
         if message.op_num == self.ordered_num + 1 {
             // println!("> query done {}", message.op_num);
             // let ordered_num = self.ordered_num;
@@ -380,7 +383,7 @@ impl Replica {
             Some(reply) if reply.request_num > request.request_num => return,
             Some(reply) if reply.request_num == request.request_num => {
                 self.context
-                    .send(To::client(request.client_index), reply.clone());
+                    .send(To::Client(request.client_index), reply.clone());
                 return;
             }
             _ => {}
@@ -392,7 +395,7 @@ impl Replica {
             seq_num: request.seq_num,
             replica_index: self.index,
         };
-        self.context.send(To::client(request.client_index), reply)
+        self.context.send(To::Client(request.client_index), reply)
     }
 
     fn do_send_confirm(&mut self) {

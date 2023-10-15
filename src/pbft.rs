@@ -11,7 +11,7 @@ use crate::{
     common::{Block, BlockDigest, Chain, Request, Timer},
     context::{
         crypto::{DigestHash, Sign, Signed, Verify},
-        ClientIndex, Host, Receivers, ReplicaIndex, To,
+        Addr, ClientIndex, Receivers, ReplicaIndex, To,
     },
     App, Context,
 };
@@ -106,7 +106,7 @@ impl crate::Client for Client {
             op,
         };
         // TODO
-        shared.context.send(To::replica(0), request);
+        shared.context.send(To::Replica(0), request);
         shared.resend_timer.set(&mut shared.context)
     }
 
@@ -173,8 +173,8 @@ impl Replica {
 impl Receivers for Replica {
     type Message = Message;
 
-    fn handle(&mut self, receiver: Host, remote: Host, message: Self::Message) {
-        assert_eq!(receiver, Host::Replica(self.index));
+    fn handle(&mut self, receiver: Addr, remote: Addr, message: Self::Message) {
+        assert_eq!(receiver, self.context.addr());
         match message {
             Message::Request(message) => self.handle_request(remote, message),
             Message::PrePrepare(message) => self.handle_pre_prepare(remote, message),
@@ -184,12 +184,13 @@ impl Receivers for Replica {
         }
     }
 
-    fn on_timer(&mut self, _: Host, _: crate::context::TimerId) {
+    fn on_timer(&mut self, receiver: Addr, _: crate::context::TimerId) {
+        assert_eq!(receiver, self.context.addr());
         todo!()
     }
 
-    fn handle_loopback(&mut self, receiver: Host, message: Self::Message) {
-        assert_eq!(receiver, Host::Replica(self.index));
+    fn handle_loopback(&mut self, receiver: Addr, message: Self::Message) {
+        assert_eq!(receiver, self.context.addr());
         match message {
             Message::PrePrepare(message) => {
                 self.pre_prepares.insert(message.block.digest(), message);
@@ -212,7 +213,7 @@ impl Replica {
         (self.view_num as usize % self.context.num_replica()) as _
     }
 
-    fn handle_request(&mut self, _remote: Host, message: Signed<Request>) {
+    fn handle_request(&mut self, _remote: Addr, message: Signed<Request>) {
         if self.index != self.primary_index() {
             // TODO
             return;
@@ -223,7 +224,7 @@ impl Replica {
         self.requests.push(message.inner);
     }
 
-    fn handle_pre_prepare(&mut self, _remote: Host, message: Signed<PrePrepare>) {
+    fn handle_pre_prepare(&mut self, _remote: Addr, message: Signed<PrePrepare>) {
         if message.view_num < self.view_num {
             return;
         }
@@ -244,7 +245,7 @@ impl Replica {
         self.context.send(To::AllReplicaWithLoopback, prepare)
     }
 
-    fn handle_prepare(&mut self, _remote: Host, message: Signed<Prepare>) {
+    fn handle_prepare(&mut self, _remote: Addr, message: Signed<Prepare>) {
         if message.view_num < self.view_num {
             return;
         }
@@ -257,7 +258,7 @@ impl Replica {
         self.insert_prepare(message);
     }
 
-    fn handle_commit(&mut self, _remote: Host, message: Signed<Commit>) {
+    fn handle_commit(&mut self, _remote: Addr, message: Signed<Commit>) {
         if message.view_num < self.view_num {
             return;
         }
@@ -337,7 +338,7 @@ impl Replica {
                     block_digest,
                     replica_index: self.index,
                 };
-                self.context.send(To::client(request.client_index), reply)
+                self.context.send(To::Client(request.client_index), reply)
             }
             if let Some(block_digest) = self.chain.next_execute() {
                 block = &self.pre_prepares[&block_digest].block;

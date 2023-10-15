@@ -10,7 +10,7 @@ use serde::{Deserialize, Serialize};
 
 use super::{
     ordered_multicast::{OrderedMulticast, Variant},
-    Host, ReplicaIndex,
+    ReplicaIndex,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -216,24 +216,10 @@ impl std::fmt::Display for Invalid {
 impl std::error::Error for Invalid {}
 
 impl Verifier {
-    pub fn new_standard(config: &crate::context::tokio::Config, variant: Arc<Variant>) -> Self {
-        let verifying_keys = config
-            .hosts
-            .iter()
-            .filter_map(|(&host, host_config)| {
-                if let Host::Replica(index) = host {
-                    Some((
-                        index,
-                        *host_config.signing_key.as_ref().unwrap().verifying_key(),
-                    ))
-                } else {
-                    None
-                }
-            })
-            .collect();
+    pub fn new_standard(hmac: Hmac<Sha256>, variant: Arc<Variant>) -> Self {
         Self::Standard(Box::new(StandardVerifier {
-            verifying_keys,
-            hmac: config.hmac.clone(),
+            verifying_keys: Default::default(),
+            hmac,
             variant,
         }))
     }

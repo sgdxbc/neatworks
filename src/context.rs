@@ -1,4 +1,4 @@
-use std::time::Duration;
+use std::{net::SocketAddr, time::Duration};
 
 use serde::Serialize;
 
@@ -19,33 +19,33 @@ pub enum Context<M> {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub enum Host {
-    Client(ClientIndex),
-    Replica(ReplicaIndex),
-    Multicast,             // as receiver
-    UnkownMulticastSource, // as remote
+pub enum Addr {
+    Socket(SocketAddr),
+    Simulated(simulated::Addr),
+    Multicast,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum To {
-    Host(Host),
-    Hosts(Vec<Host>),
+    Addr(Addr),
+    Addrs(Vec<Addr>),
+
+    Replica(ReplicaIndex),
+    Client(ClientIndex),
+    Clients(Vec<ClientIndex>),
     AllReplica,
     Loopback,
     AllReplicaWithLoopback,
 }
 
-impl To {
-    pub fn replica(index: ReplicaIndex) -> Self {
-        Self::Host(Host::Replica(index))
-    }
-
-    pub fn client(index: ClientIndex) -> Self {
-        Self::Host(Host::Client(index))
-    }
-}
-
 impl<M> Context<M> {
+    pub fn addr(&self) -> Addr {
+        match self {
+            Self::Tokio(context) => Addr::Socket(context.source),
+            Self::Simulated(context) => Addr::Simulated(context.source),
+        }
+    }
+
     pub fn num_faulty(&self) -> usize {
         match self {
             Self::Tokio(context) => context.config.num_faulty,
@@ -55,7 +55,7 @@ impl<M> Context<M> {
 
     pub fn num_replica(&self) -> usize {
         match self {
-            Self::Tokio(context) => context.config.num_replica,
+            Self::Tokio(context) => context.config.replica_addrs.len(),
             Self::Simulated(context) => context.num_replica,
         }
     }
@@ -108,14 +108,14 @@ impl<M> Context<M> {
 pub trait Receivers {
     type Message;
 
-    fn handle(&mut self, receiver: Host, remote: Host, message: Self::Message);
+    fn handle(&mut self, receiver: Addr, remote: Addr, message: Self::Message);
 
     #[allow(unused_variables)]
-    fn handle_loopback(&mut self, receiver: Host, message: Self::Message) {
+    fn handle_loopback(&mut self, receiver: Addr, message: Self::Message) {
         unreachable!()
     }
 
-    fn on_timer(&mut self, receiver: Host, id: TimerId);
+    fn on_timer(&mut self, receiver: Addr, id: TimerId);
 
     fn on_pace(&mut self) {}
 }

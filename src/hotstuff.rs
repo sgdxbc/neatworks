@@ -11,7 +11,7 @@ use crate::{
     common::{Block, BlockDigest, Chain, Request, Timer},
     context::{
         crypto::{DigestHash, Sign, Signed, Verify},
-        ClientIndex, Host, Receivers, ReplicaIndex, To,
+        Addr, ClientIndex, Receivers, ReplicaIndex, To,
     },
     App, Context,
 };
@@ -188,9 +188,9 @@ impl Replica {
 impl Receivers for Replica {
     type Message = Message;
 
-    fn handle(&mut self, receiver: Host, remote: Host, message: Self::Message) {
+    fn handle(&mut self, receiver: Addr, remote: Addr, message: Self::Message) {
         // println!("{message:02x?}");
-        assert_eq!(receiver, Host::Replica(self.index));
+        assert_eq!(receiver, self.context.addr());
         match message {
             Message::Request(message) => self.handle_request(remote, message),
             Message::Generic(message) => self.handle_generic(remote, message),
@@ -199,9 +199,9 @@ impl Receivers for Replica {
         }
     }
 
-    fn handle_loopback(&mut self, receiver: Host, message: Self::Message) {
+    fn handle_loopback(&mut self, receiver: Addr, message: Self::Message) {
         // println!("{message:02x?}");
-        assert_eq!(receiver, Host::Replica(self.index));
+        assert_eq!(receiver, self.context.addr());
         match message {
             Message::Generic(message) => self.insert_generic(message),
             Message::Vote(message) => self.handle_vote(receiver, message),
@@ -209,8 +209,8 @@ impl Receivers for Replica {
         }
     }
 
-    fn on_timer(&mut self, receiver: Host, _: crate::context::TimerId) {
-        assert_eq!(receiver, Host::Replica(self.index));
+    fn on_timer(&mut self, receiver: Addr, _: crate::context::TimerId) {
+        assert_eq!(receiver, self.context.addr());
         todo!()
     }
 
@@ -229,12 +229,12 @@ impl Replica {
         0 // TODO rotate
     }
 
-    fn handle_request(&mut self, remote: Host, message: Signed<Request>) {
+    fn handle_request(&mut self, remote: Addr, message: Signed<Request>) {
         match self.replies.get(&message.client_index) {
             Some((request_num, _)) if request_num > &message.request_num => return,
             Some((request_num, reply)) if request_num == &message.request_num => {
                 if let Some(reply) = reply {
-                    self.context.send(To::Host(remote), reply.clone())
+                    self.context.send(To::Addr(remote), reply.clone())
                 }
                 return;
             }
@@ -250,11 +250,11 @@ impl Replica {
         self.requests.push(message.inner)
     }
 
-    fn handle_generic(&mut self, _remote: Host, message: Signed<Generic>) {
+    fn handle_generic(&mut self, _remote: Addr, message: Signed<Generic>) {
         self.do_reorder_generic(message)
     }
 
-    fn handle_vote(&mut self, _remote: Host, message: Signed<Vote>) {
+    fn handle_vote(&mut self, _remote: Addr, message: Signed<Vote>) {
         let block_digest = message.block_digest;
         assert!(self.generics.contains_key(&block_digest)); // TODO
         let votes = self.votes.entry(block_digest).or_default();
@@ -332,7 +332,7 @@ impl Replica {
             let to = if self.index == self.primary_index() {
                 To::Loopback
             } else {
-                To::replica(self.primary_index())
+                To::Replica(self.primary_index())
             };
             // println!("! send vote {to:?}");
             self.context.send(to, vote)
@@ -367,7 +367,7 @@ impl Replica {
                     request.client_index,
                     (request.request_num, Some(reply.clone())),
                 );
-                self.context.send(To::client(request.client_index), reply)
+                self.context.send(To::Client(request.client_index), reply)
             }
             assert!(self.chain.next_execute().is_none())
         }

@@ -7,7 +7,7 @@ use crate::{
     common::{Block, BlockDigest, Chain, Request, Timer},
     context::{
         crypto::{DigestHash, Sign, Signed, Verify},
-        ClientIndex, Context, Host, Receivers, To,
+        Addr, ClientIndex, Context, Receivers, To,
     },
     App,
 };
@@ -70,7 +70,7 @@ impl crate::Client for Client {
             request_num: shared.request_num,
             op,
         };
-        shared.context.send(To::replica(0), request)
+        shared.context.send(To::Replica(0), request)
     }
 
     fn handle(&self, message: Self::Message) {
@@ -117,15 +117,15 @@ impl Replica {
 impl Receivers for Replica {
     type Message = Message;
 
-    fn handle(&mut self, receiver: Host, remote: Host, message: Self::Message) {
-        assert_eq!(receiver, Host::Replica(0));
-        let (Host::Client(index), Message::Request(request)) = (remote, message) else {
+    fn handle(&mut self, receiver: Addr, remote: Addr, message: Self::Message) {
+        assert_eq!(receiver, self.context.addr());
+        let Message::Request(request) = message else {
             unimplemented!()
         };
-        match self.replies.get(&index) {
+        match self.replies.get(&request.client_index) {
             Some(reply) if reply.request_num > request.request_num => return,
             Some(reply) if reply.request_num == request.request_num => {
-                self.context.send(To::Host(remote), reply.clone());
+                self.context.send(To::Addr(remote), reply.clone());
                 return;
             }
             _ => {}
@@ -142,11 +142,11 @@ impl Receivers for Replica {
             if let Some(evicted) = evicted {
                 assert_eq!(evicted.request_num, request.request_num - 1)
             }
-            self.context.send(To::client(request.client_index), reply)
+            self.context.send(To::Client(request.client_index), reply)
         }
     }
 
-    fn on_timer(&mut self, _: Host, _: crate::context::TimerId) {
+    fn on_timer(&mut self, _: Addr, _: crate::context::TimerId) {
         unreachable!()
     }
 
@@ -168,7 +168,7 @@ impl Receivers for Replica {
                 if let Some(evicted) = evicted {
                     assert_eq!(evicted.request_num, request.request_num - 1)
                 }
-                self.context.send(To::client(request.client_index), reply)
+                self.context.send(To::Client(request.client_index), reply)
             }
             assert!(self.chain.next_execute().is_none())
         }

@@ -18,50 +18,38 @@ use crate::context::crypto::Verifier;
 use super::{
     crypto::{DigestHash, Sign, Signer, Verify},
     ordered_multicast::{OrderedMulticast, Variant},
-    Host, OrderedMulticastReceivers, Receivers, ReplicaIndex, To,
+    OrderedMulticastReceivers, Receivers, ReplicaIndex, To,
 };
 
 #[derive(Debug, Clone)]
 pub struct Config {
     pub num_faulty: usize,
-    pub num_replica: usize,
-    pub hosts: HashMap<Host, ConfigHost>,
-    pub remotes: HashMap<SocketAddr, Host>,
+    pub client_addrs: Vec<Addr>,
+    pub replica_addrs: Vec<Addr>,
+    pub signing_keys: HashMap<Addr, SigningKey>, // for replicas
     pub multicast_addr: Option<SocketAddr>,
     pub hmac: Hmac<Sha256>,
 }
 
-#[derive(Debug, Clone)]
-pub struct ConfigHost {
-    pub addr: SocketAddr,
-    pub signing_key: Option<SigningKey>,
-}
-
 impl Config {
-    pub fn new(addrs: HashMap<Host, SocketAddr>, num_faulty: usize) -> Self {
-        let mut remotes = HashMap::new();
-        let mut hosts = HashMap::new();
-        let mut num_replica = 0;
-        for (&host, &addr) in &addrs {
-            remotes.insert(addr, host);
-            let signing_key;
-            match host {
-                Host::Client(_) => signing_key = None,
-                Host::Replica(index) => {
-                    signing_key = Some(Self::k256(index));
-                    num_replica += 1;
-                }
-                Host::Multicast | Host::UnkownMulticastSource => unimplemented!(),
-            };
-            hosts.insert(host, ConfigHost { addr, signing_key });
-        }
-        assert_eq!(remotes.len(), addrs.len());
-        assert!(num_faulty * 3 < num_replica);
+    pub fn new(
+        client_addrs: impl Into<Vec<Addr>>,
+        replica_addrs: impl Into<Vec<Addr>>,
+        num_faulty: usize,
+    ) -> Self {
+        let client_addrs = client_addrs.into();
+        let replica_addrs = replica_addrs.into();
+        assert!(num_faulty * 3 < replica_addrs.len());
+        let signing_keys = replica_addrs
+            .iter()
+            .enumerate()
+            .map(|(index, &addr)| (addr, Self::k256(index as _)))
+            .collect();
         Self {
             num_faulty,
-            num_replica,
-            hosts,
-            remotes,
+            client_addrs,
+            replica_addrs,
+            signing_keys,
             multicast_addr: None,
             // simplified symmetrical keys setup
             // also reduce client-side overhead a little bit by only need to sign once for broadcast
@@ -77,12 +65,14 @@ impl Config {
     }
 }
 
+pub type Addr = SocketAddr;
+
 #[derive(Debug, Clone)]
 enum Event {
-    Message(Host, Host, Vec<u8>),
-    LoopbackMessage(Host, Bytes),
-    OrderedMulticastMessage(Host, Vec<u8>),
-    Timer(Host, TimerId),
+    Message(Addr, Addr, Vec<u8>),
+    LoopbackMessage(Addr, Bytes),
+    OrderedMulticastMessage(Addr, Vec<u8>),
+    Timer(Addr, TimerId),
     Stop,
 }
 
@@ -91,7 +81,7 @@ pub struct Context {
     pub config: Arc<Config>,
     socket: Arc<UdpSocket>,
     runtime: Handle,
-    source: Host,
+    pub source: Addr,
     signer: Signer,
     timer_id: TimerId,
     timer_tasks: HashMap<TimerId, CancellationToken>,
@@ -106,26 +96,40 @@ impl Context {
     {
         let message = M::sign(message, &self.signer);
         let buf = Bytes::from(bincode::options().serialize(&message).unwrap());
-        match &to {
-            To::Host(host) => self.send_internal(self.config.hosts[&host].addr, buf.clone()),
-            To::Hosts(hosts) => {
-                for host in hosts {
-                    self.send_internal(self.config.hosts[host].addr, buf.clone())
+        if matches!(to, To::Loopback | To::AllReplicaWithLoopback) {
+            self.event
+                .send(Event::LoopbackMessage(self.source, buf.clone()))
+                .unwrap()
+        }
+        use crate::context::Addr::Socket;
+        match to {
+            To::Addr(addr) => {
+                let Socket(addr) = addr else { unimplemented!() };
+                self.send_internal(addr, buf.clone())
+            }
+            To::Addrs(addrs) => {
+                for addr in addrs {
+                    let Socket(addr) = addr else { unimplemented!() };
+                    self.send_internal(addr, buf.clone())
                 }
             }
+            To::Client(index) => self.send_internal(self.config.client_addrs[index as usize], buf),
+            To::Clients(indexes) => {
+                for index in indexes {
+                    self.send_internal(self.config.client_addrs[index as usize], buf.clone())
+                }
+            }
+            To::Replica(index) => {
+                self.send_internal(self.config.replica_addrs[index as usize], buf)
+            }
             To::AllReplica | To::AllReplicaWithLoopback => {
-                for (&host, host_config) in &self.config.hosts {
-                    if matches!(host, Host::Replica(_)) && host != self.source {
-                        self.send_internal(host_config.addr, buf.clone())
+                for &addr in &self.config.replica_addrs {
+                    if addr != self.source {
+                        self.send_internal(addr, buf.clone())
                     }
                 }
             }
             To::Loopback => {}
-        }
-        if matches!(to, To::Loopback | To::AllReplicaWithLoopback) {
-            self.event
-                .send(Event::LoopbackMessage(self.source, buf))
-                .unwrap()
         }
     }
 
@@ -167,7 +171,9 @@ impl Context {
                 if cancel.is_cancelled() {
                     return;
                 }
-                event.send_async(Event::Timer(source, id)).await.unwrap()
+                println!("start send");
+                event.send_async(Event::Timer(source, id)).await.unwrap();
+                println!("finish send");
             }
         });
         id
@@ -184,7 +190,6 @@ impl Context {
 
 #[derive(Debug)]
 pub struct Dispatch {
-    config: Arc<Config>,
     runtime: Handle,
     verifier: Verifier,
     variant: Arc<Variant>,
@@ -194,63 +199,48 @@ pub struct Dispatch {
 }
 
 impl Dispatch {
-    pub fn new(
-        config: impl Into<Arc<Config>>,
-        runtime: Handle,
-        verify: bool,
-        variant: impl Into<Arc<Variant>>,
-    ) -> Self {
-        let config = config.into();
-        let variant = variant.into();
-        let verifier = if verify {
-            Verifier::new_standard(&config, variant.clone())
-        } else {
-            Verifier::Nop
-        };
+    pub fn new(runtime: Handle, verifier: Verifier, variant: impl Into<Arc<Variant>>) -> Self {
         Self {
-            config,
             runtime,
             verifier,
-            variant,
+            variant: variant.into(),
             event: flume::unbounded(),
             rdv_event: flume::bounded(0),
             drop_rate: 0.,
         }
     }
 
-    pub fn register<M>(&self, receiver: Host) -> super::Context<M> {
+    pub fn register<M>(
+        &self,
+        addr: Addr,
+        config: impl Into<Arc<Config>>,
+        signer: Signer,
+    ) -> super::Context<M> {
         let socket = Arc::new(
             self.runtime
-                .block_on(UdpSocket::bind(self.config.hosts[&receiver].addr))
-                .unwrap_or_else(|_| panic!("binding {:?}", self.config.hosts[&receiver].addr)),
+                .block_on(UdpSocket::bind(addr))
+                .unwrap_or_else(|_| panic!("binding {addr:?}")),
         );
         socket.set_broadcast(true).unwrap();
         let context = Context {
-            config: self.config.clone(),
+            config: config.into(),
             socket: socket.clone(),
             runtime: self.runtime.clone(),
-            source: receiver,
-            signer: Signer::new_standard(
-                self.config.hosts[&receiver].signing_key.clone(),
-                self.config.hmac.clone(),
-            ),
+            source: addr,
+            signer,
             timer_id: Default::default(),
             event: self.event.0.clone(),
             rdv_event: self.rdv_event.0.clone(),
             timer_tasks: Default::default(),
         };
         let event = self.event.0.clone();
-        let config = self.config.clone();
         self.runtime.spawn(async move {
             let mut buf = vec![0; 65536];
             loop {
                 let (len, remote) = socket.recv_from(&mut buf).await.unwrap();
+                // `try_send` here to minimize rx process latency, avoid hardware packet dropping
                 event
-                    .try_send(Event::Message(
-                        receiver,
-                        config.remotes[&remote],
-                        buf[..len].to_vec(),
-                    ))
+                    .try_send(Event::Message(addr, remote, buf[..len].to_vec()))
                     .unwrap()
             }
         });
@@ -291,6 +281,8 @@ impl Dispatch {
                 .recv(&self.event.1, Result::unwrap)
                 .recv(&self.rdv_event.1, Result::unwrap)
                 .wait();
+            println!("{event:?}");
+            use crate::context::Addr::Socket;
             match event {
                 Event::Stop => break,
                 Event::Message(receiver, remote, message) => {
@@ -300,11 +292,11 @@ impl Dispatch {
                     }
                     let message = deserialize(&message);
                     message.verify(&self.verifier).unwrap();
-                    receivers.handle(receiver, remote, message)
+                    receivers.handle(Socket(receiver), Socket(remote), message)
                 }
                 Event::LoopbackMessage(receiver, message) => {
                     pace_count -= 1;
-                    receivers.handle_loopback(receiver, deserialize(&message))
+                    receivers.handle_loopback(Socket(receiver), deserialize(&message))
                 }
                 Event::OrderedMulticastMessage(remote, message) => {
                     pace_count -= 1;
@@ -312,7 +304,7 @@ impl Dispatch {
                         continue;
                     }
                     delegate.on_receive(
-                        remote,
+                        Socket(remote),
                         self.variant.deserialize(message),
                         receivers,
                         &self.verifier,
@@ -320,7 +312,7 @@ impl Dispatch {
                     )
                 }
                 Event::Timer(receiver, id) => {
-                    receivers.on_timer(receiver, super::TimerId::Tokio(id))
+                    receivers.on_timer(Socket(receiver), super::TimerId::Tokio(id))
                 }
             }
         }
@@ -353,30 +345,19 @@ impl std::ops::Deref for OrderedMulticastDispatch {
 }
 
 impl Dispatch {
-    pub fn enable_ordered_multicast(self) -> OrderedMulticastDispatch {
+    pub fn enable_ordered_multicast(self, addr: Addr) -> OrderedMulticastDispatch {
         let socket = self
             .runtime
             // .block_on(UdpSocket::bind(self.config.multicast_addr.unwrap()))
-            .block_on(UdpSocket::bind((
-                "0.0.0.0",
-                self.config.multicast_addr.unwrap().port(),
-            )))
+            .block_on(UdpSocket::bind(("0.0.0.0", addr.port())))
             .unwrap();
         let event = self.event.0.clone();
-        let config = self.config.clone();
         self.runtime.spawn(async move {
             let mut buf = vec![0; 65536];
             loop {
                 let (len, remote) = socket.recv_from(&mut buf).await.unwrap();
                 event
-                    .try_send(Event::OrderedMulticastMessage(
-                        config
-                            .remotes
-                            .get(&remote)
-                            .copied()
-                            .unwrap_or(Host::UnkownMulticastSource),
-                        buf[..len].to_vec(),
-                    ))
+                    .try_send(Event::OrderedMulticastMessage(remote, buf[..len].to_vec()))
                     .unwrap()
             }
         });
@@ -444,16 +425,11 @@ mod tests {
             .build()
             .unwrap();
         let _enter = runtime.enter();
-        let config = Config::new(
-            [(Host::Replica(0), "127.0.0.1:10000".parse().unwrap())]
-                .into_iter()
-                .collect(),
-            0,
-        );
+        let addr = SocketAddr::from(([127, 0, 0, 1], 10000));
+        let config = Config::new([], [addr], 0);
         let dispatch = Dispatch::new(
-            config,
             runtime.handle().clone(),
-            false,
+            Verifier::Nop,
             Variant::Unreachable,
         );
 
@@ -465,7 +441,11 @@ mod tests {
             }
         }
 
-        let mut context = dispatch.register(Host::Replica(0));
+        let mut context = dispatch.register(
+            addr,
+            config.clone(),
+            Signer::new_standard(None, config.hmac),
+        );
         let id = context.set(Duration::from_millis(10));
 
         let handle = dispatch.handle();
@@ -475,8 +455,8 @@ mod tests {
                 tokio::time::sleep(Duration::from_millis(9)).await;
                 event
                     .send_async(Event::Message(
-                        Host::Replica(0),
-                        Host::Client(0),
+                        addr,
+                        SocketAddr::from(([127, 0, 0, 1], 20000)),
                         bincode::options().serialize(&M).unwrap(),
                     ))
                     .await
@@ -491,7 +471,12 @@ mod tests {
         impl Receivers for R {
             type Message = M;
 
-            fn handle(&mut self, _: Host, _: Host, M: Self::Message) {
+            fn handle(
+                &mut self,
+                _: crate::context::Addr,
+                _: crate::context::Addr,
+                M: Self::Message,
+            ) {
                 if !self.0 {
                     println!("unset");
                     self.1.unset(self.2);
@@ -499,13 +484,13 @@ mod tests {
                 self.0 = true;
             }
 
-            fn handle_loopback(&mut self, _: Host, _: Self::Message) {
+            fn handle_loopback(&mut self, _: crate::context::Addr, _: Self::Message) {
                 unreachable!()
             }
 
-            fn on_timer(&mut self, _: Host, _: crate::context::TimerId) {
-                assert!(!self.0);
+            fn on_timer(&mut self, _: crate::context::Addr, _: crate::context::TimerId) {
                 println!("alarm");
+                assert!(!self.0);
             }
         }
 
@@ -515,7 +500,8 @@ mod tests {
     #[test]
     fn false_alarm_100() {
         for _ in 0..100 {
-            false_alarm()
+            false_alarm();
+            println!()
         }
     }
 }

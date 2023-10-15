@@ -13,10 +13,10 @@ use crate::{
     app::Workload,
     common::set_affinity,
     context::{
-        crypto::Verify,
+        crypto::{Signer, Verify},
         ordered_multicast::Variant,
         tokio::{Dispatch, DispatchHandle},
-        ClientIndex, Host,
+        Addr, ClientIndex,
     },
     Context,
 };
@@ -77,10 +77,10 @@ impl<T: Client> Client for Arc<T> {
 
 #[derive(Debug)]
 pub struct Benchmark<C> {
-    clients: HashMap<Host, Arc<C>>,
+    clients: HashMap<Addr, Arc<C>>,
     bootstrap: bool,
-    finish_sender: flume::Sender<(Host, Duration)>,
-    finish_receiver: flume::Receiver<(Host, Duration)>,
+    finish_sender: flume::Sender<(Addr, Duration)>,
+    finish_receiver: flume::Receiver<(Addr, Duration)>,
     pub latencies: Vec<Duration>,
 }
 
@@ -102,8 +102,8 @@ impl<C> Benchmark<C> {
         }
     }
 
-    pub fn insert_client(&mut self, index: ClientIndex, client: C) {
-        let evicted = self.clients.insert(Host::Client(index), Arc::new(client));
+    pub fn insert_client(&mut self, addr: Addr, client: C) {
+        let evicted = self.clients.insert(addr, Arc::new(client));
         assert!(evicted.is_none())
     }
 
@@ -148,18 +148,18 @@ impl<C> Benchmark<C> {
         C: Client + Send + Sync + 'static,
         C::Message: DeserializeOwned + Verify,
     {
-        struct R<C>(HashMap<Host, Arc<C>>);
+        struct R<C>(HashMap<Addr, Arc<C>>);
         impl<C> crate::context::Receivers for R<C>
         where
             C: Client,
         {
             type Message = C::Message;
 
-            fn handle(&mut self, receiver: Host, _: Host, message: Self::Message) {
+            fn handle(&mut self, receiver: Addr, _: Addr, message: Self::Message) {
                 self.0[&receiver].handle(message)
             }
 
-            fn on_timer(&mut self, receiver: Host, _: crate::context::TimerId) {
+            fn on_timer(&mut self, receiver: Addr, _: crate::context::TimerId) {
                 panic!("{receiver:?} timeout")
             }
         }
@@ -171,7 +171,7 @@ impl<C> Benchmark<C> {
 
 #[derive(Debug)]
 pub struct RunBenchmarkConfig {
-    pub dispatch_config: crate::context::tokio::Config,
+    pub context_config: crate::context::tokio::Config,
     pub offset: usize,
     pub num_group: usize,
     pub num_client: usize,
@@ -196,7 +196,7 @@ where
 
     // println!("{config:?}");
     let barrier = Arc::new(Barrier::new(config.num_group));
-    let dispatch_config = Arc::new(config.dispatch_config);
+    let context_config = Arc::new(config.context_config);
     let groups = Vec::from_iter(
         repeat((barrier, Arc::new(config.workload)))
             .take(config.num_group)
@@ -208,18 +208,24 @@ where
                     .unwrap();
                 let handle = runtime.handle().clone();
                 let mut dispatch = Dispatch::new(
-                    dispatch_config.clone(),
                     handle.clone(),
-                    false,
+                    crate::context::crypto::Verifier::Nop,
                     Variant::Unreachable,
                 );
 
                 let mut benchmark = Benchmark::new();
                 for group_offset in 0..config.num_client {
-                    let index = (config.offset + group_index * config.num_client + group_offset)
-                        as ClientIndex;
-                    let client = new_client(dispatch.register(Host::Client(index)), index);
-                    benchmark.insert_client(index, client);
+                    let index = config.offset + group_index * config.num_client + group_offset;
+                    let addr = context_config.client_addrs[index];
+                    let client = new_client(
+                        dispatch.register(
+                            addr,
+                            context_config.clone(),
+                            Signer::new_standard(None, context_config.hmac.clone()),
+                        ),
+                        index as _,
+                    );
+                    benchmark.insert_client(Addr::Socket(addr), client);
                 }
 
                 let cancel = CancellationToken::new();
