@@ -135,7 +135,7 @@ async fn set_task(State(state): State<Arc<Mutex<AppState>>>, Json(task): Json<Ta
                     for index in 0..replication_config.replica_addrs.len() {
                         verifier.insert_verifying_key(
                             index as _,
-                            *hardcoded_k256(index as _).verifying_key(),
+                            hardcoded_k256(index as _).verifying_key(),
                         )
                     }
                     match &*task.mode {

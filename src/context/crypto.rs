@@ -1,4 +1,4 @@
-use std::{collections::HashMap, hash::Hash, sync::Arc};
+use std::{collections::HashMap, hash::Hash, mem::take, sync::Arc};
 
 use ed25519_dalek::Sha512;
 use hmac::{Hmac, Mac};
@@ -53,6 +53,7 @@ pub enum Hasher {
     Sha256(Sha256),
     Sha512(Sha512),
     Hmac(Hmac<Sha256>),
+    Bytes(Vec<u8>),
 }
 
 impl Hasher {
@@ -61,6 +62,7 @@ impl Hasher {
             Self::Sha256(hasher) => hasher.update(data),
             Self::Sha512(hasher) => hasher.update(data),
             Self::Hmac(hasher) => hasher.update(data.as_ref()),
+            Self::Bytes(hasher) => hasher.extend(data.as_ref()),
         }
     }
 
@@ -69,6 +71,7 @@ impl Hasher {
             Self::Sha256(hasher) => Self::Sha256(hasher.chain_update(data)),
             Self::Sha512(hasher) => Self::Sha512(hasher.chain_update(data)),
             Self::Hmac(hasher) => Self::Hmac(hasher.chain_update(data)),
+            Self::Bytes(hasher) => Self::Bytes([&hasher, data.as_ref()].concat()),
         }
     }
 }
@@ -137,6 +140,22 @@ impl Hasher {
             unreachable!()
         };
     }
+
+    pub fn bytes(message: &impl DigestHash) -> Vec<u8> {
+        let mut buf = Vec::new();
+        Self::bytes_update(message, &mut buf);
+        buf
+    }
+
+    pub fn bytes_update(message: &impl DigestHash, buf: &mut Vec<u8>) {
+        let mut hasher = Self::Bytes(take(buf));
+        message.hash(&mut hasher);
+        if let Self::Bytes(new_buf) = hasher {
+            *buf = new_buf
+        } else {
+            unreachable!()
+        };
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -147,15 +166,21 @@ pub enum Signer {
 
 #[derive(Debug, Clone)]
 pub struct StandardSigner {
-    signing_key: Option<k256::ecdsa::SigningKey>,
+    signing_key: Option<SigningKey>,
     hmac: Hmac<Sha256>,
 }
 
-pub fn hardcoded_k256(index: ReplicaIndex) -> k256::ecdsa::SigningKey {
+#[derive(Debug, Clone)]
+pub enum SigningKey {
+    K256(k256::ecdsa::SigningKey),
+    Ed25519(ed25519_dalek::SigningKey),
+}
+
+pub fn hardcoded_k256(index: ReplicaIndex) -> SigningKey {
     let k = format!("hardcoded-{index}");
     let mut buf = [0; 32];
     buf[..k.as_bytes().len()].copy_from_slice(k.as_bytes());
-    k256::ecdsa::SigningKey::from_slice(&buf).unwrap()
+    SigningKey::K256(k256::ecdsa::SigningKey::from_slice(&buf).unwrap())
 }
 
 pub fn hardcoded_hmac() -> Hmac<Sha256> {
@@ -163,7 +188,7 @@ pub fn hardcoded_hmac() -> Hmac<Sha256> {
 }
 
 impl Signer {
-    pub fn new_standard(signing_key: impl Into<Option<k256::ecdsa::SigningKey>>) -> Self {
+    pub fn new_standard(signing_key: impl Into<Option<SigningKey>>) -> Self {
         Self::Standard(Box::new(StandardSigner {
             signing_key: signing_key.into(),
             hmac: hardcoded_hmac(),
@@ -202,10 +227,19 @@ impl StandardSigner {
     where
         M: DigestHash,
     {
-        let digest = Hasher::sha256(&message);
+        let signature = match self.signing_key.as_ref().unwrap() {
+            SigningKey::K256(signing_key) => {
+                let digest = Hasher::sha256(&message);
+                Signature::K256(signing_key.sign_digest(digest))
+            }
+            SigningKey::Ed25519(signing_key) => {
+                let digest = Hasher::sha512(&message);
+                Signature::Ed25519(signing_key.sign_digest(digest))
+            }
+        };
         Signed {
             inner: message,
-            signature: Signature::K256(self.signing_key.as_ref().unwrap().sign_digest(digest)),
+            signature,
         }
     }
 
@@ -231,15 +265,31 @@ pub enum Verifier<I> {
 
 #[derive(Debug, Clone)]
 pub struct StandardVerifier<I> {
-    verifying_keys: HashMap<I, k256::ecdsa::VerifyingKey>,
+    verifying_keys: HashMap<I, VerifyingKey>,
     hmac: Hmac<Sha256>,
     variant: Arc<Variant>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum VerifyingKey {
+    K256(k256::ecdsa::VerifyingKey),
+    Ed25519(ed25519_dalek::VerifyingKey),
+}
+
+impl SigningKey {
+    pub fn verifying_key(&self) -> VerifyingKey {
+        match self {
+            Self::K256(signing_key) => VerifyingKey::K256(*signing_key.verifying_key()),
+            Self::Ed25519(signing_key) => VerifyingKey::Ed25519(signing_key.verifying_key()),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy)]
 pub enum Invalid {
     Public,
     Private,
+    Variant,
 }
 
 impl std::fmt::Display for Invalid {
@@ -259,7 +309,7 @@ impl<I> Verifier<I> {
         }))
     }
 
-    pub fn insert_verifying_key(&mut self, identity: I, verifying_key: k256::ecdsa::VerifyingKey)
+    pub fn insert_verifying_key(&mut self, identity: I, verifying_key: VerifyingKey)
     where
         I: Hash + Eq,
     {
@@ -286,16 +336,29 @@ impl<I> Verifier<I> {
             (Self::Nop, _) => Ok(()),
             (Self::Simulated, Signature::SimulatedPrivate | Signature::SimulatedPublic) => Ok(()),
             (Self::Simulated, _) => unimplemented!(),
-            (Self::Standard(verifier), Signature::K256(signature)) => verifier.verifying_keys
-                [&identity.into().unwrap()]
-                .verify_digest(Hasher::sha256(&**message), signature)
-                .map_err(|_| Invalid::Public),
             (Self::Standard(verifier), Signature::Hmac(code)) => {
                 let mut hmac = verifier.hmac.clone();
                 Hasher::hmac_update(message, &mut hmac);
                 hmac.verify(code.into()).map_err(|_| Invalid::Private)
             }
-            (Self::Standard(_), _) => unimplemented!(),
+            (Self::Standard(verifier), signature) => {
+                match (
+                    &verifier.verifying_keys[&identity.into().unwrap()],
+                    signature,
+                ) {
+                    (VerifyingKey::K256(verifying_key), Signature::K256(signature)) => {
+                        verifying_key
+                            .verify_digest(Hasher::sha256(&**message), signature)
+                            .map_err(|_| Invalid::Public)
+                    }
+                    (VerifyingKey::Ed25519(verifying_key), Signature::Ed25519(signature)) => {
+                        verifying_key
+                            .verify_digest(Hasher::sha512(&**message), signature)
+                            .map_err(|_| Invalid::Public)
+                    }
+                    _ => Err(Invalid::Variant),
+                }
+            }
         }
     }
 
