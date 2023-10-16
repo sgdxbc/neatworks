@@ -33,6 +33,7 @@ pub enum Signature {
     SimulatedPrivate,
     SimulatedPublic,
     K256(k256::ecdsa::Signature),
+    Ed25519(ed25519_dalek::Signature),
     Hmac([u8; 32]),
 }
 
@@ -42,6 +43,7 @@ impl<M: DigestHash> DigestHash for Signed<M> {
         match &self.signature {
             Signature::Plain | Signature::SimulatedPrivate | Signature::SimulatedPublic => {} // TODO
             Signature::K256(signature) => hasher.write(&signature.to_bytes()),
+            Signature::Ed25519(signature) => hasher.write(&signature.to_bytes()),
             Signature::Hmac(codes) => hasher.write(codes),
         }
     }
@@ -117,6 +119,16 @@ impl Hasher {
             unreachable!()
         };
         hmac.finalize().into_bytes().into()
+    }
+
+    pub fn hmac_update(message: &impl DigestHash, hmac: &mut Hmac<Sha256>) {
+        let mut hasher = Self::Hmac(hmac.clone());
+        message.hash(&mut hasher);
+        if let Self::Hmac(new_hmac) = hasher {
+            *hmac = new_hmac
+        } else {
+            unreachable!()
+        };
     }
 }
 
@@ -238,7 +250,7 @@ impl<I> Verifier<I> {
         }))
     }
 
-    pub fn insert_verifying_key(&mut self, index: I, verifying_key: VerifyingKey)
+    pub fn insert_verifying_key(&mut self, identity: I, verifying_key: VerifyingKey)
     where
         I: Hash + Eq,
     {
@@ -246,13 +258,17 @@ impl<I> Verifier<I> {
             Self::Nop => {}
             Self::Simulated => unimplemented!(),
             Self::Standard(verifier) => {
-                let evicted = verifier.verifying_keys.insert(index, verifying_key);
+                let evicted = verifier.verifying_keys.insert(identity, verifying_key);
                 assert!(evicted.is_none())
             }
         }
     }
 
-    pub fn verify<M>(&self, message: &Signed<M>, index: impl Into<Option<I>>) -> Result<(), Invalid>
+    pub fn verify<M>(
+        &self,
+        message: &Signed<M>,
+        identity: impl Into<Option<I>>,
+    ) -> Result<(), Invalid>
     where
         M: DigestHash,
         I: Hash + Eq,
@@ -262,16 +278,12 @@ impl<I> Verifier<I> {
             (Self::Simulated, Signature::SimulatedPrivate | Signature::SimulatedPublic) => Ok(()),
             (Self::Simulated, _) => unimplemented!(),
             (Self::Standard(verifier), Signature::K256(signature)) => verifier.verifying_keys
-                [&index.into().unwrap()]
+                [&identity.into().unwrap()]
                 .verify_digest(Hasher::sha256(&**message), signature)
                 .map_err(|_| Invalid::Public),
             (Self::Standard(verifier), Signature::Hmac(code)) => {
-                // well...
-                let mut hasher = Hasher::Hmac(verifier.hmac.clone());
-                M::hash(message, &mut hasher);
-                let Hasher::Hmac(hmac) = hasher else {
-                    unreachable!()
-                };
+                let mut hmac = verifier.hmac.clone();
+                Hasher::hmac_update(message, &mut hmac);
                 hmac.verify(code.into()).map_err(|_| Invalid::Private)
             }
             (Self::Standard(_), _) => unimplemented!(),
