@@ -227,15 +227,15 @@ impl Variant {
 }
 
 impl<M> Delegate<M> {
-    pub fn on_receive<N>(
+    pub fn on_receive<N, I>(
         &mut self,
         remote: Addr,
         message: OrderedMulticast<M>,
         receivers: &mut impl Receivers<Message = N>,
-        verifier: &Verifier,
+        verifier: &Verifier<I>,
         into: impl Fn(OrderedMulticast<M>) -> N,
     ) where
-        N: Verify,
+        N: Verify<I>,
     {
         match self {
             &mut Self::Nop(index) => {
@@ -280,13 +280,13 @@ impl<M> Delegate<M> {
         }
     }
 
-    pub fn on_pace<N>(
+    pub fn on_pace<N, I>(
         &mut self,
         receivers: &mut impl Receivers<Message = N>,
-        verifier: &Verifier,
+        verifier: &Verifier<I>,
         into: impl Fn(OrderedMulticast<M>) -> N,
     ) where
-        N: Verify,
+        N: Verify<I>,
     {
         if let Self::K256(saved) = self {
             if let Some((remote, message)) = saved.take() {

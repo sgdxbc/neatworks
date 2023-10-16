@@ -13,10 +13,10 @@ use crate::{
     app::Workload,
     common::set_affinity,
     context::{
-        crypto::{Signer, Verify},
+        crypto::{Signer, Verifier, Verify},
         ordered_multicast::Variant,
         tokio::{Dispatch, DispatchHandle},
-        Addr, ClientIndex,
+        Addr, ClientIndex, ReplicaIndex,
     },
     Context,
 };
@@ -146,7 +146,7 @@ impl<C> Benchmark<C> {
     pub fn run_dispatch(&self) -> impl FnOnce(&mut crate::context::tokio::Dispatch) + Send
     where
         C: Client + Send + Sync + 'static,
-        C::Message: DeserializeOwned + Verify,
+        C::Message: DeserializeOwned + Verify<ReplicaIndex>,
     {
         struct R<C>(HashMap<Addr, Arc<C>>);
         impl<C> crate::context::Receivers for R<C>
@@ -165,7 +165,7 @@ impl<C> Benchmark<C> {
         }
 
         let mut receivers = R(self.clients.clone());
-        move |runtime| runtime.run(&mut receivers)
+        move |runtime| runtime.run(&mut receivers, Verifier::<ReplicaIndex>::Nop)
     }
 }
 
@@ -185,7 +185,7 @@ pub fn run_benchmark<C>(
 ) -> Vec<Duration>
 where
     C: Client + Send + Sync + 'static,
-    C::Message: DeserializeOwned + Verify,
+    C::Message: DeserializeOwned + Verify<ReplicaIndex>,
 {
     struct Group<C> {
         benchmark_thread: JoinHandle<Benchmark<C>>,
@@ -207,11 +207,7 @@ where
                     .build()
                     .unwrap();
                 let handle = runtime.handle().clone();
-                let mut dispatch = Dispatch::new(
-                    handle.clone(),
-                    crate::context::crypto::Verifier::Nop,
-                    Variant::Unreachable,
-                );
+                let mut dispatch = Dispatch::new(handle.clone(), Variant::Unreachable);
 
                 let mut benchmark = Benchmark::new();
                 for group_offset in 0..config.num_client {

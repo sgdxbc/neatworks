@@ -530,10 +530,10 @@ impl From<QueryOk> for Message {
     }
 }
 
-impl Verify for Message {
+impl Verify<ReplicaIndex> for Message {
     fn verify(
         &self,
-        verifier: &crate::context::crypto::Verifier,
+        verifier: &crate::context::crypto::Verifier<ReplicaIndex>,
     ) -> Result<(), crate::context::crypto::Invalid> {
         match self {
             Self::Request(message) => verifier.verify_ordered_multicast(message),

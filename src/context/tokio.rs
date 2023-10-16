@@ -3,7 +3,7 @@
 //! Although supported by an asynchronous reactor, protocol code, i.e.,
 //! `impl Receivers` is still synchronous and running in a separated thread.
 
-use std::{collections::HashMap, net::SocketAddr, sync::Arc, time::Duration};
+use std::{borrow::Borrow, collections::HashMap, net::SocketAddr, sync::Arc, time::Duration};
 
 use bincode::Options;
 use rand::Rng;
@@ -178,7 +178,6 @@ impl Context {
 #[derive(Debug)]
 pub struct Dispatch {
     runtime: Handle,
-    verifier: Verifier,
     variant: Arc<Variant>,
     event: (flume::Sender<Event>, flume::Receiver<Event>),
     rdv_event: (flume::Sender<Event>, flume::Receiver<Event>),
@@ -187,10 +186,9 @@ pub struct Dispatch {
 }
 
 impl Dispatch {
-    pub fn new(runtime: Handle, verifier: Verifier, variant: impl Into<Arc<Variant>>) -> Self {
+    pub fn new(runtime: Handle, variant: impl Into<Arc<Variant>>) -> Self {
         Self {
             runtime,
-            verifier,
             variant: variant.into(),
             event: flume::unbounded(),
             rdv_event: flume::bounded(0),
@@ -239,10 +237,14 @@ impl Dispatch {
 }
 
 impl Dispatch {
-    fn run_internal<R, M, N>(&self, receivers: &mut R, into: impl Fn(OrderedMulticast<N>) -> M)
-    where
+    fn run_internal<R, M, N, I>(
+        &self,
+        receivers: &mut R,
+        into: impl Fn(OrderedMulticast<N>) -> M,
+        verifier: &Verifier<I>,
+    ) where
         R: Receivers<Message = M>,
-        M: DeserializeOwned + Verify,
+        M: DeserializeOwned + Verify<I>,
         N: DeserializeOwned + DigestHash,
     {
         let deserialize = |buf: &_| {
@@ -256,7 +258,7 @@ impl Dispatch {
         loop {
             if pace_count == 0 {
                 // println!("* pace");
-                delegate.on_pace(receivers, &self.verifier, &into);
+                delegate.on_pace(receivers, verifier, &into);
                 receivers.on_pace();
                 pace_count = if self.event.0.is_empty() {
                     1
@@ -289,7 +291,7 @@ impl Dispatch {
                         continue;
                     }
                     let message = deserialize(&message);
-                    message.verify(&self.verifier).unwrap();
+                    message.verify(verifier).unwrap();
                     receivers.handle(Socket(receiver), Socket(remote), message)
                 }
                 Event::LoopbackMessage(receiver, message) => {
@@ -305,7 +307,7 @@ impl Dispatch {
                         Socket(remote),
                         self.variant.deserialize(message),
                         receivers,
-                        &self.verifier,
+                        verifier,
                         &into,
                     )
                 }
@@ -315,9 +317,12 @@ impl Dispatch {
         }
     }
 
-    pub fn run<M>(&self, receivers: &mut impl Receivers<Message = M>)
-    where
-        M: DeserializeOwned + Verify,
+    pub fn run<M, I>(
+        &self,
+        receivers: &mut impl Receivers<Message = M>,
+        verifier: impl Borrow<Verifier<I>>,
+    ) where
+        M: DeserializeOwned + Verify<I>,
     {
         #[derive(Deserialize)]
         enum O {}
@@ -326,7 +331,7 @@ impl Dispatch {
                 unreachable!()
             }
         }
-        self.run_internal::<_, _, O>(receivers, |_| unimplemented!())
+        self.run_internal::<_, _, O, _>(receivers, |_| unimplemented!(), verifier.borrow())
     }
 }
 
@@ -363,15 +368,16 @@ impl Dispatch {
 }
 
 impl OrderedMulticastDispatch {
-    pub fn run<M, N>(
+    pub fn run<M, N, I>(
         &self,
         receivers: &mut (impl Receivers<Message = M> + OrderedMulticastReceivers<Message = N>),
+        verifier: impl Borrow<Verifier<I>>,
     ) where
-        M: DeserializeOwned + Verify,
+        M: DeserializeOwned + Verify<I>,
         N: DeserializeOwned + DigestHash,
         OrderedMulticast<N>: Into<M>,
     {
-        self.run_internal(receivers, Into::into)
+        self.run_internal(receivers, Into::into, verifier.borrow())
     }
 }
 
@@ -424,16 +430,12 @@ mod tests {
         let _enter = runtime.enter();
         let addr = SocketAddr::from(([127, 0, 0, 1], 10000));
         let config = Config::new([], [addr], 0);
-        let dispatch = Dispatch::new(
-            runtime.handle().clone(),
-            Verifier::Nop,
-            Variant::Unreachable,
-        );
+        let dispatch = Dispatch::new(runtime.handle().clone(), Variant::Unreachable);
 
         #[derive(Serialize, Deserialize)]
         struct M;
-        impl Verify for M {
-            fn verify(&self, _: &Verifier) -> Result<(), crate::context::crypto::Invalid> {
+        impl<I> Verify<I> for M {
+            fn verify(&self, _: &Verifier<I>) -> Result<(), crate::context::crypto::Invalid> {
                 Ok(())
             }
         }
@@ -487,7 +489,7 @@ mod tests {
             }
         }
 
-        dispatch.run(&mut R(false, context, id));
+        dispatch.run(&mut R(false, context, id), Verifier::<()>::Nop);
     }
 
     #[test]

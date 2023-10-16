@@ -1,4 +1,4 @@
-use std::{collections::HashMap, sync::Arc};
+use std::{collections::HashMap, hash::Hash, sync::Arc};
 
 use hmac::{Hmac, Mac};
 use k256::{
@@ -202,15 +202,15 @@ impl StandardSigner {
 }
 
 #[derive(Debug, Clone)]
-pub enum Verifier {
+pub enum Verifier<I> {
     Nop,
     Simulated,
-    Standard(Box<StandardVerifier>),
+    Standard(Box<StandardVerifier<I>>),
 }
 
 #[derive(Debug, Clone)]
-pub struct StandardVerifier {
-    verifying_keys: HashMap<ReplicaIndex, VerifyingKey>,
+pub struct StandardVerifier<I> {
+    verifying_keys: HashMap<I, VerifyingKey>,
     hmac: Hmac<Sha256>,
     variant: Arc<Variant>,
 }
@@ -229,7 +229,7 @@ impl std::fmt::Display for Invalid {
 
 impl std::error::Error for Invalid {}
 
-impl Verifier {
+impl<I> Verifier<I> {
     pub fn new_standard(variant: impl Into<Arc<Variant>>) -> Self {
         Self::Standard(Box::new(StandardVerifier {
             verifying_keys: Default::default(),
@@ -238,7 +238,10 @@ impl Verifier {
         }))
     }
 
-    pub fn insert_verifying_key(&mut self, index: ReplicaIndex, verifying_key: VerifyingKey) {
+    pub fn insert_verifying_key(&mut self, index: I, verifying_key: VerifyingKey)
+    where
+        I: Hash + Eq,
+    {
         match self {
             Self::Nop => {}
             Self::Simulated => unimplemented!(),
@@ -249,13 +252,10 @@ impl Verifier {
         }
     }
 
-    pub fn verify<M>(
-        &self,
-        message: &Signed<M>,
-        index: impl Into<Option<ReplicaIndex>>,
-    ) -> Result<(), Invalid>
+    pub fn verify<M>(&self, message: &Signed<M>, index: impl Into<Option<I>>) -> Result<(), Invalid>
     where
         M: DigestHash,
+        I: Hash + Eq,
     {
         match (self, &message.signature) {
             (Self::Nop, _) => Ok(()),
@@ -300,6 +300,6 @@ impl<M, N: Into<M>> Sign<N> for M {
     }
 }
 
-pub trait Verify {
-    fn verify(&self, verifier: &Verifier) -> Result<(), Invalid>;
+pub trait Verify<I> {
+    fn verify(&self, verifier: &Verifier<I>) -> Result<(), Invalid>;
 }

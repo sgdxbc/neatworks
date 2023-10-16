@@ -201,10 +201,10 @@ impl Sign<Reply> for Message {
     }
 }
 
-impl Verify for Message {
+impl Verify<crate::context::ReplicaIndex> for Message {
     fn verify(
         &self,
-        verifier: &crate::context::crypto::Verifier,
+        verifier: &crate::context::crypto::Verifier<crate::context::ReplicaIndex>,
     ) -> Result<(), crate::context::crypto::Invalid> {
         match self {
             Self::Request(message) => verifier.verify(message, None),
