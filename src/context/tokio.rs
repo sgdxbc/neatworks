@@ -10,7 +10,7 @@ use hmac::{Hmac, Mac};
 use k256::{ecdsa::SigningKey, sha2::Sha256};
 use rand::Rng;
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
-use tokio::{net::UdpSocket, runtime::Handle, task::JoinHandle};
+use tokio::{net::UdpSocket, runtime::Handle, sync::Mutex, task::JoinHandle};
 use tokio_util::bytes::Bytes;
 
 use crate::context::crypto::Verifier;
@@ -73,6 +73,7 @@ enum Event {
     LoopbackMessage(Addr, Bytes),
     OrderedMulticastMessage(Addr, Vec<u8>),
     Timer(Addr, TimerId),
+    TimerNotification,
     Stop,
 }
 
@@ -85,6 +86,7 @@ pub struct Context {
     signer: Signer,
     timer_id: TimerId,
     timer_tasks: HashMap<TimerId, JoinHandle<()>>,
+    timer_lock: Arc<Mutex<Vec<Event>>>,
     event: flume::Sender<Event>,
     rdv_event: flume::Sender<Event>,
 }
@@ -157,26 +159,32 @@ impl Context {
 
 pub type TimerId = u32;
 
+// timer is designed to eliminate false alarm through rendezvous channel
+// however, current flume implementation of rendezvous channel is buggy and
+// does not maintain semantic
+// so `Event::Timer` are passed through a temporary locked vector, and the
+// channel instead passes a temporary `Event::TimerNotification` which is
+// allowed to be spurious
+// i believe the original solution should also work for multithreading runtime
+
 impl Context {
     pub fn set(&mut self, duration: Duration) -> TimerId {
         self.timer_id += 1;
         let id = self.timer_id;
         let event = self.rdv_event.clone();
         let source = self.source;
+        let timer_lock = self.timer_lock.clone();
         let task = self.runtime.spawn(async move {
             loop {
                 tokio::time::sleep(duration).await;
-                event.send_async(Event::Timer(source, id)).await.unwrap()
+                timer_lock.lock().await.push(Event::Timer(source, id));
+                event.send_async(Event::TimerNotification).await.unwrap()
             }
         });
         self.timer_tasks.insert(id, task);
         id
     }
 
-    // only works in current thread runtime
-    // in multi-thread runtime, there will always be a chance that the timer task wakes concurrent
-    // to this `unset` call, then this call has no way to prevent false alarm
-    // TODO mutual exclusive between `Receivers` callbacks and timer tasks
     pub fn unset(&mut self, id: TimerId) {
         let task = self.timer_tasks.remove(&id).unwrap();
         task.abort();
@@ -192,6 +200,7 @@ pub struct Dispatch {
     variant: Arc<Variant>,
     event: (flume::Sender<Event>, flume::Receiver<Event>),
     rdv_event: (flume::Sender<Event>, flume::Receiver<Event>),
+    timer_lock: Arc<Mutex<Vec<Event>>>,
     pub drop_rate: f64,
 }
 
@@ -203,6 +212,7 @@ impl Dispatch {
             variant: variant.into(),
             event: flume::unbounded(),
             rdv_event: flume::bounded(0),
+            timer_lock: Default::default(),
             drop_rate: 0.,
         }
     }
@@ -226,9 +236,10 @@ impl Dispatch {
             source: addr,
             signer,
             timer_id: Default::default(),
+            timer_tasks: Default::default(),
+            timer_lock: self.timer_lock.clone(),
             event: self.event.0.clone(),
             rdv_event: self.rdv_event.0.clone(),
-            timer_tasks: Default::default(),
         };
         let event = self.event.0.clone();
         self.runtime.spawn(async move {
@@ -278,7 +289,15 @@ impl Dispatch {
                 .recv(&self.event.1, Result::unwrap)
                 .recv(&self.rdv_event.1, Result::unwrap)
                 .wait();
-            println!("{event:?}");
+            // println!("{event:?}");
+            let mut timer_lock = self.timer_lock.blocking_lock();
+            for event in timer_lock.drain(..) {
+                let Event::Timer(receiver, id) = event else {
+                    unreachable!()
+                };
+                receivers.on_timer(Socket(receiver), super::TimerId::Tokio(id))
+            }
+
             use crate::context::Addr::Socket;
             match event {
                 Event::Stop => break,
@@ -308,9 +327,8 @@ impl Dispatch {
                         &into,
                     )
                 }
-                Event::Timer(receiver, id) => {
-                    receivers.on_timer(Socket(receiver), super::TimerId::Tokio(id))
-                }
+                Event::TimerNotification => {} // handled above
+                Event::Timer(_, _) => unreachable!(),
             }
         }
     }

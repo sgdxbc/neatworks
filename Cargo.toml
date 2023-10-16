@@ -28,5 +28,5 @@ k256 = { version = "0.13.1", features = ["serde"] }
 nix = { version = "0.27.1", features = ["sched"] }
 rand = "0.8.5"
 serde = { version = "1.0.188", features = ["derive"] }
-tokio = { version = "1.32.0", features = ["net", "rt", "signal", "time"] }
+tokio = { version = "1.32.0", features = ["net", "rt", "signal", "sync", "time"] }
 tokio-util = "0.7.9"
