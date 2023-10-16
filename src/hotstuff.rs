@@ -105,7 +105,7 @@ impl crate::Client for Client {
         let Message::Reply(message) = message else {
             unimplemented!()
         };
-        let shared = &mut *self.shared.lock().unwrap();
+        let mut shared = self.shared.lock().unwrap();
         if message.request_num != shared.request_num {
             return;
         }
@@ -122,8 +122,13 @@ impl crate::Client for Client {
             .count();
         assert!(num_match <= shared.context.num_faulty() + 1);
         if num_match == shared.context.num_faulty() + 1 {
-            shared.resend_timer.unset(&mut shared.context);
+            {
+                let shared = &mut *shared;
+                shared.resend_timer.unset(&mut shared.context);
+            }
             let invoke = shared.invoke.take().unwrap();
+            drop(shared);
+
             let _op = invoke.op;
             invoke.consume.apply(message.inner.result)
         }

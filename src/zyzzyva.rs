@@ -116,7 +116,8 @@ impl crate::Client for Client {
     }
 
     fn handle(&self, message: Self::Message) {
-        let shared = &mut *self.shared.lock().unwrap();
+        let mut shared_guard = self.shared.lock().unwrap();
+        let shared = &mut *shared_guard;
         match message {
             Message::SpecResponse(message) => {
                 // println!("{message:?}");
@@ -146,6 +147,8 @@ impl crate::Client for Client {
                 if num_match == shared.context.num_replica() {
                     shared.resend_timer.unset(&mut shared.context);
                     let invoke = shared.invoke.take().unwrap();
+                    drop(shared_guard);
+
                     let _op = invoke.op;
                     invoke.consume.apply(result.clone())
                 } else if self.byzantine
@@ -174,6 +177,8 @@ impl crate::Client for Client {
                 {
                     shared.resend_timer.unset(&mut shared.context);
                     let invoke = shared.invoke.take().unwrap();
+                    drop(shared_guard);
+
                     invoke.consume.apply(invoke.commit_result.unwrap())
                 }
             }

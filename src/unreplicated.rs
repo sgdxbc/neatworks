@@ -34,7 +34,7 @@ pub struct Client {
 struct ClientShared {
     context: Context<Message>,
     request_num: u32,
-    op: Option<Vec<u8>>,
+    op: Vec<u8>,
     consume: Option<BoxedConsume>,
     resend_timer: Timer,
 }
@@ -46,7 +46,7 @@ impl Client {
             shared: Mutex::new(ClientShared {
                 context,
                 request_num: 0,
-                op: None,
+                op: Default::default(),
                 consume: None,
                 resend_timer: Timer::new(Duration::from_millis(100)),
             }),
@@ -59,9 +59,9 @@ impl crate::Client for Client {
 
     fn invoke(&self, op: Vec<u8>, consume: impl Into<BoxedConsume>) {
         let shared = &mut *self.shared.lock().unwrap();
+        assert!(shared.consume.is_none());
         shared.request_num += 1;
-        assert!(shared.op.is_none());
-        shared.op = Some(op.clone());
+        shared.op = op.clone();
         shared.consume = Some(consume.into());
         shared.resend_timer.set(&mut shared.context);
 
@@ -77,13 +77,20 @@ impl crate::Client for Client {
         let Message::Reply(reply) = message else {
             unimplemented!()
         };
-        let shared = &mut *self.shared.lock().unwrap();
+        let mut shared = self.shared.lock().unwrap();
         if reply.request_num != shared.request_num {
             return;
         }
-        shared.op.take().unwrap();
-        shared.resend_timer.unset(&mut shared.context);
-        shared.consume.take().unwrap().apply(reply.inner.result);
+
+        {
+            let shared = &mut *shared;
+            shared.resend_timer.unset(&mut shared.context);
+        }
+        shared.op.clear();
+        let consume = shared.consume.take().unwrap();
+        drop(shared);
+
+        consume.apply(reply.inner.result);
     }
 }
 

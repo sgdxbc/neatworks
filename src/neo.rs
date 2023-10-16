@@ -120,7 +120,7 @@ impl crate::Client for Client {
             unimplemented!()
         };
         // println!("{message:?}");
-        let shared = &mut *self.shared.lock().unwrap();
+        let mut shared = self.shared.lock().unwrap();
         if message.request_num != shared.request_num {
             return;
         }
@@ -134,17 +134,19 @@ impl crate::Client for Client {
             .replies
             .values()
             .filter(|reply| {
-                (
-                    reply.epoch_num, //
-                    reply.seq_num,
-                    &reply.result,
-                ) == (message.epoch_num, message.seq_num, &message.result)
+                (reply.epoch_num, reply.seq_num, &reply.result)
+                    == (message.epoch_num, message.seq_num, &message.result)
             })
             .count()
             >= shared.context.num_replica() - shared.context.num_faulty()
         {
-            shared.resend_timer.unset(&mut shared.context);
+            {
+                let shared = &mut *shared;
+                shared.resend_timer.unset(&mut shared.context);
+            }
             let invoke = shared.invoke.take().unwrap();
+            drop(shared);
+
             let _op = invoke.op;
             invoke.consume.apply(message.inner.result)
         }
