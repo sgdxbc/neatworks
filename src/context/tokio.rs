@@ -10,8 +10,8 @@ use hmac::{Hmac, Mac};
 use k256::{ecdsa::SigningKey, sha2::Sha256};
 use rand::Rng;
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
-use tokio::{net::UdpSocket, runtime::Handle};
-use tokio_util::{bytes::Bytes, sync::CancellationToken};
+use tokio::{net::UdpSocket, runtime::Handle, task::JoinHandle};
+use tokio_util::bytes::Bytes;
 
 use crate::context::crypto::Verifier;
 
@@ -84,7 +84,7 @@ pub struct Context {
     pub source: Addr,
     signer: Signer,
     timer_id: TimerId,
-    timer_tasks: HashMap<TimerId, CancellationToken>,
+    timer_tasks: HashMap<TimerId, JoinHandle<()>>,
     event: flume::Sender<Event>,
     rdv_event: flume::Sender<Event>,
 }
@@ -163,19 +163,13 @@ impl Context {
         let id = self.timer_id;
         let event = self.rdv_event.clone();
         let source = self.source;
-        let cancel = CancellationToken::new();
-        self.timer_tasks.insert(id, cancel.clone());
-        self.runtime.spawn(async move {
+        let task = self.runtime.spawn(async move {
             loop {
-                let _ = tokio::time::timeout(duration, cancel.cancelled()).await;
-                if cancel.is_cancelled() {
-                    return;
-                }
-                println!("start send");
-                event.send_async(Event::Timer(source, id)).await.unwrap();
-                println!("finish send");
+                tokio::time::sleep(duration).await;
+                event.send_async(Event::Timer(source, id)).await.unwrap()
             }
         });
+        self.timer_tasks.insert(id, task);
         id
     }
 
@@ -184,7 +178,10 @@ impl Context {
     // to this `unset` call, then this call has no way to prevent false alarm
     // TODO mutual exclusive between `Receivers` callbacks and timer tasks
     pub fn unset(&mut self, id: TimerId) {
-        self.timer_tasks.remove(&id).unwrap().cancel()
+        let task = self.timer_tasks.remove(&id).unwrap();
+        task.abort();
+        let result = self.runtime.block_on(task);
+        assert!(result.is_err())
     }
 }
 
