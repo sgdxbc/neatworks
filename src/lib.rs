@@ -11,4 +11,4 @@ pub mod zyzzyva;
 
 pub use app::App;
 pub use client::Client;
-pub use context::Context;
+pub use context::replication::{Context, To};

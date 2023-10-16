@@ -16,55 +16,24 @@ use crate::context::crypto::Verifier;
 use super::{
     crypto::{DigestHash, Sign, Signer, Verify},
     ordered_multicast::{OrderedMulticast, Variant},
-    OrderedMulticastReceivers, Receivers, To,
+    Addr, OrderedMulticastReceivers, Receivers, To,
 };
 
 #[derive(Debug, Clone)]
-pub struct Config {
-    pub num_faulty: usize,
-    pub client_addrs: Vec<Addr>,
-    pub replica_addrs: Vec<Addr>,
-    pub multicast_addr: Option<SocketAddr>,
-}
-
-impl Config {
-    pub fn new(
-        client_addrs: impl Into<Vec<Addr>>,
-        replica_addrs: impl Into<Vec<Addr>>,
-        num_faulty: usize,
-    ) -> Self {
-        let client_addrs = client_addrs.into();
-        let replica_addrs = replica_addrs.into();
-        assert!(num_faulty * 3 < replica_addrs.len());
-        Self {
-            num_faulty,
-            client_addrs,
-            replica_addrs,
-            multicast_addr: None,
-            // simplified symmetrical keys setup
-            // also reduce client-side overhead a little bit by only need to sign once for broadcast
-        }
-    }
-}
-
-pub type Addr = SocketAddr;
-
-#[derive(Debug, Clone)]
 enum Event {
-    Message(Addr, Addr, Vec<u8>),
-    LoopbackMessage(Addr, Bytes),
-    OrderedMulticastMessage(Addr, Vec<u8>),
-    Timer(Addr, TimerId),
+    Message(SocketAddr, SocketAddr, Vec<u8>),
+    LoopbackMessage(SocketAddr, Bytes),
+    OrderedMulticastMessage(SocketAddr, Vec<u8>),
+    Timer(SocketAddr, TimerId),
     TimerNotification,
     Stop,
 }
 
 #[derive(Debug)]
 pub struct Context {
-    pub config: Arc<Config>,
     socket: Arc<UdpSocket>,
     runtime: Handle,
-    pub source: Addr,
+    pub source: SocketAddr,
     signer: Signer,
     timer_id: TimerId,
     timer_tasks: HashMap<TimerId, JoinHandle<()>>,
@@ -80,44 +49,27 @@ impl Context {
     {
         let message = M::sign(message, &self.signer);
         let buf = Bytes::from(bincode::options().serialize(&message).unwrap());
-        if matches!(to, To::Loopback | To::AllReplicaWithLoopback) {
+        if matches!(to, To::Loopback | To::AddrsWithLoopback(_)) {
             self.event
                 .send(Event::LoopbackMessage(self.source, buf.clone()))
                 .unwrap()
         }
-        use crate::context::Addr::Socket;
+
         match to {
-            To::Addr(addr) => {
-                let Socket(addr) = addr else { unimplemented!() };
-                self.send_internal(addr, buf.clone())
-            }
-            To::Addrs(addrs) => {
+            To::Addr(addr) => self.send_buf(addr, buf.clone()),
+            To::Addrs(addrs) | To::AddrsWithLoopback(addrs) => {
                 for addr in addrs {
-                    let Socket(addr) = addr else { unimplemented!() };
-                    self.send_internal(addr, buf.clone())
-                }
-            }
-            To::Client(index) => self.send_internal(self.config.client_addrs[index as usize], buf),
-            To::Clients(indexes) => {
-                for index in indexes {
-                    self.send_internal(self.config.client_addrs[index as usize], buf.clone())
-                }
-            }
-            To::Replica(index) => {
-                self.send_internal(self.config.replica_addrs[index as usize], buf)
-            }
-            To::AllReplica | To::AllReplicaWithLoopback => {
-                for &addr in &self.config.replica_addrs {
-                    if addr != self.source {
-                        self.send_internal(addr, buf.clone())
-                    }
+                    self.send_buf(addr, buf.clone())
                 }
             }
             To::Loopback => {}
         }
     }
 
-    fn send_internal(&self, addr: SocketAddr, buf: impl AsRef<[u8]> + Send + Sync + 'static) {
+    pub fn send_buf(&self, addr: Addr, buf: impl AsRef<[u8]> + Send + Sync + 'static) {
+        let Addr::Socket(addr) = addr else {
+            unimplemented!()
+        };
         let socket = self.socket.clone();
         self.runtime.spawn(async move {
             socket
@@ -125,13 +77,6 @@ impl Context {
                 .await
                 .unwrap_or_else(|err| panic!("{err} target: {addr:?}"))
         });
-    }
-
-    pub fn send_ordered_multicast(&self, message: impl Serialize + DigestHash) {
-        self.send_internal(
-            self.config.multicast_addr.unwrap(),
-            super::ordered_multicast::serialize(&message),
-        )
     }
 
     pub fn idle_hint(&self) -> bool {
@@ -197,12 +142,10 @@ impl Dispatch {
         }
     }
 
-    pub fn register<M>(
-        &self,
-        addr: Addr,
-        config: impl Into<Arc<Config>>,
-        signer: Signer,
-    ) -> super::Context<M> {
+    pub fn register<M>(&self, addr: Addr, signer: Signer) -> super::Context<M> {
+        let Addr::Socket(addr) = addr else {
+            unimplemented!()
+        };
         let socket = Arc::new(
             self.runtime
                 .block_on(UdpSocket::bind(addr))
@@ -210,7 +153,6 @@ impl Dispatch {
         );
         socket.set_broadcast(true).unwrap();
         let context = Context {
-            config: config.into(),
             socket: socket.clone(),
             runtime: self.runtime.clone(),
             source: addr,
@@ -348,6 +290,9 @@ impl std::ops::Deref for OrderedMulticastDispatch {
 
 impl Dispatch {
     pub fn enable_ordered_multicast(self, addr: Addr) -> OrderedMulticastDispatch {
+        let Addr::Socket(addr) = addr else {
+            unimplemented!()
+        };
         let socket = self
             .runtime
             // .block_on(UdpSocket::bind(self.config.multicast_addr.unwrap()))
@@ -429,7 +374,6 @@ mod tests {
             .unwrap();
         let _enter = runtime.enter();
         let addr = SocketAddr::from(([127, 0, 0, 1], 10000));
-        let config = Config::new([], [addr], 0);
         let dispatch = Dispatch::new(runtime.handle().clone(), Variant::Unreachable);
 
         #[derive(Serialize, Deserialize)]
@@ -440,7 +384,7 @@ mod tests {
             }
         }
 
-        let mut context = dispatch.register(addr, config.clone(), Signer::new_standard(None));
+        let mut context = dispatch.register(Addr::Socket(addr), Signer::new_standard(None));
         let id = context.set(Duration::from_millis(10));
 
         let handle = dispatch.handle();

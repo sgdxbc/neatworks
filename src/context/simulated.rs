@@ -27,8 +27,6 @@ pub type TimerId = u32;
 
 #[derive(Debug)]
 pub struct Context<M> {
-    pub num_faulty: usize,
-    pub num_replica: usize,
     pub source: Addr,
     timeline: Arc<Mutex<Timeline<M>>>,
 }
@@ -74,7 +72,7 @@ impl<M> Context<M> {
     {
         let message = M::sign(message, &Signer::Simulated);
         let mut timeline = self.timeline.try_lock().unwrap();
-        if matches!(to, To::Loopback | To::AllReplicaWithLoopback) {
+        if matches!(to, To::Loopback | To::AddrsWithLoopback(_)) {
             timeline.add_event(
                 Duration::ZERO,
                 Event::LoopbackMessage(self.source, message.clone()),
@@ -87,7 +85,7 @@ impl<M> Context<M> {
                 };
                 timeline.add_event(Duration::ZERO, Event::Message(addr, self.source, message))
             }
-            To::Addrs(addrs) => {
+            To::Addrs(addrs) | To::AddrsWithLoopback(addrs) => {
                 for addr in addrs {
                     let crate::context::Addr::Simulated(addr) = addr else {
                         unimplemented!()
@@ -97,32 +95,6 @@ impl<M> Context<M> {
                         Duration::ZERO,
                         Event::Message(addr, self.source, message.clone()),
                     )
-                }
-            }
-            To::Client(index) => timeline.add_event(
-                Duration::ZERO,
-                Event::Message(Addr::Client(index), self.source, message),
-            ),
-            To::Clients(indexes) => {
-                for index in indexes {
-                    timeline.add_event(
-                        Duration::ZERO,
-                        Event::Message(Addr::Client(index), self.source, message.clone()),
-                    )
-                }
-            }
-            To::Replica(index) => timeline.add_event(
-                Duration::ZERO,
-                Event::Message(Addr::Replica(index), self.source, message),
-            ),
-            To::AllReplica | To::AllReplicaWithLoopback => {
-                for index in 0..self.num_replica {
-                    if Addr::Replica(index as _) != self.source {
-                        timeline.add_event(
-                            Duration::ZERO,
-                            Event::Message(Addr::Replica(index as _), self.source, message.clone()),
-                        )
-                    }
                 }
             }
             To::Loopback => {}
@@ -144,16 +116,12 @@ impl<M> Context<M> {
 
 #[derive(Debug)]
 pub struct Dispatch<M> {
-    num_faulty: usize,
-    num_replica: usize,
     timeline: Arc<Mutex<Timeline<M>>>,
 }
 
 impl<M> Dispatch<M> {
-    pub fn register(&self, receiver: Addr) -> crate::Context<M> {
-        crate::Context::Simulated(Context {
-            num_faulty: self.num_faulty,
-            num_replica: self.num_replica,
+    pub fn register(&self, receiver: Addr) -> super::Context<M> {
+        super::Context::Simulated(Context {
             source: receiver,
             timeline: self.timeline.clone(),
         })

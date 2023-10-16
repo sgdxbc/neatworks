@@ -17,7 +17,9 @@ use permissioned_blockchain::{
     context::{
         crypto::{hardcoded_k256, Signer, Verifier},
         ordered_multicast::Variant,
-        tokio::{Config, Dispatch},
+        replication::Config,
+        tokio::Dispatch,
+        Addr,
     },
     hotstuff, minbft, neo, pbft, unreplicated, zyzzyva, App,
 };
@@ -43,8 +45,9 @@ enum AppState {
 async fn set_task(State(state): State<Arc<Mutex<AppState>>>, Json(task): Json<Task>) {
     assert!(matches!(*state.lock().unwrap(), AppState::Idle));
 
-    let mut context_config = Config::new(task.client_addrs, task.replica_addrs, task.num_faulty);
-    context_config.multicast_addr = Some(task.multicast_addr);
+    let mut replication_config =
+        Config::new_socket(task.client_addrs, task.replica_addrs, task.num_faulty);
+    replication_config.multicast_addr = Some(Addr::Socket(task.multicast_addr));
 
     let mut rng = StdRng::seed_from_u64(task.seed);
     match task.role {
@@ -58,7 +61,7 @@ async fn set_task(State(state): State<Arc<Mutex<AppState>>>, Json(task): Json<Ta
             };
 
             let benchmark_config = RunBenchmarkConfig {
-                context_config,
+                replication_config,
                 offset: config.offset,
                 num_group: config.num_group,
                 num_client: config.num_client,
@@ -126,10 +129,10 @@ async fn set_task(State(state): State<Arc<Mutex<AppState>>>, Json(task): Json<Ta
                     });
 
                     set_affinity(1);
-                    let addr = context_config.replica_addrs[replica.index as usize];
+                    let addr = replication_config.replica_addrs[replica.index as usize];
                     let signer = Signer::new_standard(hardcoded_k256(replica.index));
                     let mut verifier = Verifier::new_standard(variant);
-                    for index in 0..context_config.replica_addrs.len() {
+                    for index in 0..replication_config.replica_addrs.len() {
                         verifier.insert_verifying_key(
                             index as _,
                             *hardcoded_k256(index as _).verifying_key(),
@@ -139,7 +142,9 @@ async fn set_task(State(state): State<Arc<Mutex<AppState>>>, Json(task): Json<Ta
                         "unreplicated" => {
                             assert_eq!(replica.index, 0);
                             let mut replica = unreplicated::Replica::new(
-                                dispatch.register(addr, context_config, signer),
+                                dispatch
+                                    .register(addr, signer)
+                                    .into_replication(replication_config),
                                 app,
                             );
                             // replica.make_blocks = true;
@@ -147,19 +152,25 @@ async fn set_task(State(state): State<Arc<Mutex<AppState>>>, Json(task): Json<Ta
                         }
                         "neo-hm" | "neo-pk" | "neo-bn" => {
                             let mut replica = neo::Replica::new(
-                                dispatch.register(addr, context_config.clone(), signer),
+                                dispatch
+                                    .register(addr, signer)
+                                    .into_replication(replication_config.clone()),
                                 replica.index,
                                 app,
                                 task.mode == "neo-bn",
                             );
                             dispatch.drop_rate = task.drop_rate;
                             dispatch
-                                .enable_ordered_multicast(context_config.multicast_addr.unwrap())
+                                .enable_ordered_multicast(
+                                    replication_config.multicast_addr.unwrap(),
+                                )
                                 .run(&mut replica, verifier)
                         }
                         "pbft" => {
                             let mut replica = pbft::Replica::new(
-                                dispatch.register(addr, context_config, signer),
+                                dispatch
+                                    .register(addr, signer)
+                                    .into_replication(replication_config.clone()),
                                 replica.index,
                                 app,
                             );
@@ -167,7 +178,9 @@ async fn set_task(State(state): State<Arc<Mutex<AppState>>>, Json(task): Json<Ta
                         }
                         "zyzzyva" | "zyzzyva-f" => {
                             let mut replica = zyzzyva::Replica::new(
-                                dispatch.register(addr, context_config, signer),
+                                dispatch
+                                    .register(addr, signer)
+                                    .into_replication(replication_config.clone()),
                                 replica.index,
                                 app,
                             );
@@ -175,7 +188,9 @@ async fn set_task(State(state): State<Arc<Mutex<AppState>>>, Json(task): Json<Ta
                         }
                         "hotstuff" => {
                             let mut replica = hotstuff::Replica::new(
-                                dispatch.register(addr, context_config, signer),
+                                dispatch
+                                    .register(addr, signer)
+                                    .into_replication(replication_config.clone()),
                                 replica.index,
                                 app,
                             );
@@ -183,7 +198,9 @@ async fn set_task(State(state): State<Arc<Mutex<AppState>>>, Json(task): Json<Ta
                         }
                         "minbft" => {
                             let mut replica = minbft::Replica::new(
-                                dispatch.register(addr, context_config, signer),
+                                dispatch
+                                    .register(addr, signer)
+                                    .into_replication(replication_config.clone()),
                                 replica.index,
                                 app,
                             );

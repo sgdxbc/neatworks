@@ -18,7 +18,6 @@ use crate::{
         tokio::{Dispatch, DispatchHandle},
         Addr, ClientIndex, ReplicaIndex,
     },
-    Context,
 };
 
 pub trait OnResult {
@@ -171,7 +170,7 @@ impl<C> Benchmark<C> {
 
 #[derive(Debug)]
 pub struct RunBenchmarkConfig {
-    pub context_config: crate::context::tokio::Config,
+    pub replication_config: crate::context::replication::Config,
     pub offset: usize,
     pub num_group: usize,
     pub num_client: usize,
@@ -181,7 +180,7 @@ pub struct RunBenchmarkConfig {
 
 pub fn run_benchmark<C>(
     config: RunBenchmarkConfig,
-    new_client: impl Fn(Context<C::Message>, ClientIndex) -> C,
+    new_client: impl Fn(crate::Context<C::Message>, ClientIndex) -> C,
 ) -> Vec<Duration>
 where
     C: Client + Send + Sync + 'static,
@@ -196,7 +195,7 @@ where
 
     // println!("{config:?}");
     let barrier = Arc::new(Barrier::new(config.num_group));
-    let context_config = Arc::new(config.context_config);
+    let replication_config = Arc::new(config.replication_config);
     let groups = Vec::from_iter(
         repeat((barrier, Arc::new(config.workload)))
             .take(config.num_group)
@@ -212,12 +211,14 @@ where
                 let mut benchmark = Benchmark::new();
                 for group_offset in 0..config.num_client {
                     let index = config.offset + group_index * config.num_client + group_offset;
-                    let addr = context_config.client_addrs[index];
+                    let addr = replication_config.client_addrs[index];
                     let client = new_client(
-                        dispatch.register(addr, context_config.clone(), Signer::new_standard(None)),
+                        dispatch
+                            .register(addr, Signer::new_standard(None))
+                            .into_replication(replication_config.clone()),
                         index as _,
                     );
-                    benchmark.insert_client(Addr::Socket(addr), client);
+                    benchmark.insert_client(addr, client);
                 }
 
                 let cancel = CancellationToken::new();

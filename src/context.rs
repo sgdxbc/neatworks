@@ -1,11 +1,8 @@
-use std::{net::SocketAddr, time::Duration};
-
 use serde::Serialize;
-
-use self::{crypto::DigestHash, ordered_multicast::OrderedMulticast};
 
 pub mod crypto;
 pub mod ordered_multicast;
+pub mod replication;
 pub mod simulated;
 pub mod tokio;
 
@@ -20,7 +17,7 @@ pub enum Context<M> {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum Addr {
-    Socket(SocketAddr),
+    Socket(std::net::SocketAddr),
     Simulated(simulated::Addr),
     Multicast,
 }
@@ -29,13 +26,8 @@ pub enum Addr {
 pub enum To {
     Addr(Addr),
     Addrs(Vec<Addr>),
-
-    Replica(ReplicaIndex),
-    Client(ClientIndex),
-    Clients(Vec<ClientIndex>),
-    AllReplica,
     Loopback,
-    AllReplicaWithLoopback,
+    AddrsWithLoopback(Vec<Addr>),
 }
 
 impl<M> Context<M> {
@@ -43,20 +35,6 @@ impl<M> Context<M> {
         match self {
             Self::Tokio(context) => Addr::Socket(context.source),
             Self::Simulated(context) => Addr::Simulated(context.source),
-        }
-    }
-
-    pub fn num_faulty(&self) -> usize {
-        match self {
-            Self::Tokio(context) => context.config.num_faulty,
-            Self::Simulated(context) => context.num_faulty,
-        }
-    }
-
-    pub fn num_replica(&self) -> usize {
-        match self {
-            Self::Tokio(context) => context.config.replica_addrs.len(),
-            Self::Simulated(context) => context.num_replica,
         }
     }
 
@@ -70,13 +48,9 @@ impl<M> Context<M> {
         }
     }
 
-    pub fn send_ordered_multicast<N>(&mut self, message: N)
-    where
-        N: Serialize + DigestHash,
-        OrderedMulticast<N>: Into<M>,
-    {
+    pub fn send_buf(&self, addr: Addr, buf: impl AsRef<[u8]> + Send + Sync + 'static) {
         match self {
-            Self::Tokio(context) => context.send_ordered_multicast(message),
+            Self::Tokio(context) => context.send_buf(addr, buf),
             Self::Simulated(_) => todo!(),
         }
     }
@@ -89,7 +63,7 @@ pub enum TimerId {
 }
 
 impl<M> Context<M> {
-    pub fn set(&mut self, duration: Duration) -> TimerId {
+    pub fn set(&mut self, duration: std::time::Duration) -> TimerId {
         match self {
             Self::Tokio(context) => TimerId::Tokio(context.set(duration)),
             Self::Simulated(context) => TimerId::Simulated(context.set(duration)),

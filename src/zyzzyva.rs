@@ -11,9 +11,9 @@ use crate::{
     common::{Block, BlockDigest, Chain, Request, Timer},
     context::{
         crypto::{DigestHash, Sign, Signed, Verify},
-        Addr, ClientIndex, Receivers, ReplicaIndex, To,
+        Addr, ClientIndex, Receivers, ReplicaIndex,
     },
-    App, Context,
+    App, Context, To,
 };
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
