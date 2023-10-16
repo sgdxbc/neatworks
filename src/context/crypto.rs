@@ -1,8 +1,8 @@
 use std::{collections::HashMap, hash::Hash, sync::Arc};
 
+use ed25519_dalek::Sha512;
 use hmac::{Hmac, Mac};
 use k256::{
-    ecdsa::{SigningKey, VerifyingKey},
     schnorr::signature::{DigestSigner, DigestVerifier},
     sha2::{Digest, Sha256},
 };
@@ -51,6 +51,7 @@ impl<M: DigestHash> DigestHash for Signed<M> {
 
 pub enum Hasher {
     Sha256(Sha256),
+    Sha512(Sha512),
     Hmac(Hmac<Sha256>),
 }
 
@@ -58,6 +59,7 @@ impl Hasher {
     pub fn update(&mut self, data: impl AsRef<[u8]>) {
         match self {
             Self::Sha256(hasher) => hasher.update(data),
+            Self::Sha512(hasher) => hasher.update(data),
             Self::Hmac(hasher) => hasher.update(data.as_ref()),
         }
     }
@@ -65,6 +67,7 @@ impl Hasher {
     pub fn chain_update(self, data: impl AsRef<[u8]>) -> Self {
         match self {
             Self::Sha256(hasher) => Self::Sha256(hasher.chain_update(data)),
+            Self::Sha512(hasher) => Self::Sha512(hasher.chain_update(data)),
             Self::Hmac(hasher) => Self::Hmac(hasher.chain_update(data)),
         }
     }
@@ -94,11 +97,8 @@ impl<T: DigestHash> DigestHash for [T] {
 
 impl Hasher {
     pub fn sha256(message: &impl DigestHash) -> Sha256 {
-        let mut hasher = Self::Sha256(Sha256::new());
-        message.hash(&mut hasher);
-        let Self::Sha256(digest) = hasher else {
-            unreachable!()
-        };
+        let mut digest = Sha256::new();
+        Self::sha256_update(message, &mut digest);
         digest
     }
 
@@ -112,13 +112,20 @@ impl Hasher {
         };
     }
 
-    pub fn hmac(message: &impl DigestHash, hmac: Hmac<Sha256>) -> [u8; 32] {
-        let mut hasher = Self::Hmac(hmac);
+    pub fn sha512(message: &impl DigestHash) -> Sha512 {
+        let mut digest = Sha512::new();
+        Self::sha512_update(message, &mut digest);
+        digest
+    }
+
+    pub fn sha512_update(message: &impl DigestHash, digest: &mut Sha512) {
+        let mut hasher = Self::Sha512(digest.clone());
         message.hash(&mut hasher);
-        let Self::Hmac(hmac) = hasher else {
+        if let Self::Sha512(new_digest) = hasher {
+            *digest = new_digest
+        } else {
             unreachable!()
         };
-        hmac.finalize().into_bytes().into()
     }
 
     pub fn hmac_update(message: &impl DigestHash, hmac: &mut Hmac<Sha256>) {
@@ -140,15 +147,15 @@ pub enum Signer {
 
 #[derive(Debug, Clone)]
 pub struct StandardSigner {
-    signing_key: Option<SigningKey>,
+    signing_key: Option<k256::ecdsa::SigningKey>,
     hmac: Hmac<Sha256>,
 }
 
-pub fn hardcoded_k256(index: ReplicaIndex) -> SigningKey {
+pub fn hardcoded_k256(index: ReplicaIndex) -> k256::ecdsa::SigningKey {
     let k = format!("hardcoded-{index}");
     let mut buf = [0; 32];
     buf[..k.as_bytes().len()].copy_from_slice(k.as_bytes());
-    SigningKey::from_slice(&buf).unwrap()
+    k256::ecdsa::SigningKey::from_slice(&buf).unwrap()
 }
 
 pub fn hardcoded_hmac() -> Hmac<Sha256> {
@@ -156,7 +163,7 @@ pub fn hardcoded_hmac() -> Hmac<Sha256> {
 }
 
 impl Signer {
-    pub fn new_standard(signing_key: impl Into<Option<SigningKey>>) -> Self {
+    pub fn new_standard(signing_key: impl Into<Option<k256::ecdsa::SigningKey>>) -> Self {
         Self::Standard(Box::new(StandardSigner {
             signing_key: signing_key.into(),
             hmac: hardcoded_hmac(),
@@ -206,8 +213,10 @@ impl StandardSigner {
     where
         M: DigestHash,
     {
+        let mut hmac = self.hmac.clone();
+        Hasher::hmac_update(&message, &mut hmac);
         Signed {
-            signature: Signature::Hmac(Hasher::hmac(&message, self.hmac.clone())),
+            signature: Signature::Hmac(hmac.finalize().into_bytes().into()),
             inner: message,
         }
     }
@@ -222,7 +231,7 @@ pub enum Verifier<I> {
 
 #[derive(Debug, Clone)]
 pub struct StandardVerifier<I> {
-    verifying_keys: HashMap<I, VerifyingKey>,
+    verifying_keys: HashMap<I, k256::ecdsa::VerifyingKey>,
     hmac: Hmac<Sha256>,
     variant: Arc<Variant>,
 }
@@ -250,7 +259,7 @@ impl<I> Verifier<I> {
         }))
     }
 
-    pub fn insert_verifying_key(&mut self, identity: I, verifying_key: VerifyingKey)
+    pub fn insert_verifying_key(&mut self, identity: I, verifying_key: k256::ecdsa::VerifyingKey)
     where
         I: Hash + Eq,
     {

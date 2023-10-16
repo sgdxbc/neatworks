@@ -116,7 +116,7 @@ pub struct K256 {
     verifying_key: VerifyingKey,
 }
 
-const SWITCH_SIGNING_KEY: &[u8] = include_bytes!("switch_signing_key");
+const SIGNING_KEY: &[u8] = include_bytes!("ordered_multicast_signing_key");
 
 impl Variant {
     pub fn new_half_sip_hash(index: ReplicaIndex) -> Self {
@@ -125,9 +125,7 @@ impl Variant {
 
     pub fn new_k256() -> Self {
         Self::K256(K256 {
-            verifying_key: *SigningKey::from_slice(SWITCH_SIGNING_KEY)
-                .unwrap()
-                .verifying_key(),
+            verifying_key: *SigningKey::from_slice(SIGNING_KEY).unwrap().verifying_key(),
         })
     }
 
@@ -330,7 +328,7 @@ impl Sequencer {
             seq_num: 0,
             crypto: SequencerCrypto::K256 {
                 state: Default::default(),
-                signing_key: Arc::new(SigningKey::from_slice(SWITCH_SIGNING_KEY).unwrap()),
+                signing_key: Arc::new(SigningKey::from_slice(SIGNING_KEY).unwrap()),
             },
         }
     }
