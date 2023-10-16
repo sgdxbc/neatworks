@@ -26,7 +26,7 @@ const PROGRAM: &str = "permissioned-blockchain";
 
 fn main() {
     let status = Command::new("cargo")
-        .args(["build", "--release", "--bin", PROGRAM])
+        .args(["build", "--release", "--workspace", "--bin", PROGRAM])
         .status()
         .unwrap();
     assert!(status.success());
