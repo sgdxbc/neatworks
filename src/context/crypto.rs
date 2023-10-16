@@ -132,9 +132,23 @@ pub struct StandardSigner {
     hmac: Hmac<Sha256>,
 }
 
+pub fn hardcoded_k256(index: ReplicaIndex) -> SigningKey {
+    let k = format!("hardcoded-{index}");
+    let mut buf = [0; 32];
+    buf[..k.as_bytes().len()].copy_from_slice(k.as_bytes());
+    SigningKey::from_slice(&buf).unwrap()
+}
+
+pub fn hardcoded_hmac() -> Hmac<Sha256> {
+    Hmac::new_from_slice("shared".as_bytes()).unwrap()
+}
+
 impl Signer {
-    pub fn new_standard(signing_key: Option<SigningKey>, hmac: Hmac<Sha256>) -> Self {
-        Self::Standard(Box::new(StandardSigner { signing_key, hmac }))
+    pub fn new_standard(signing_key: impl Into<Option<SigningKey>>) -> Self {
+        Self::Standard(Box::new(StandardSigner {
+            signing_key: signing_key.into(),
+            hmac: hardcoded_hmac(),
+        }))
     }
 
     pub fn sign_public<M>(&self, message: M) -> Signed<M>
@@ -216,12 +230,23 @@ impl std::fmt::Display for Invalid {
 impl std::error::Error for Invalid {}
 
 impl Verifier {
-    pub fn new_standard(hmac: Hmac<Sha256>, variant: Arc<Variant>) -> Self {
+    pub fn new_standard(variant: impl Into<Arc<Variant>>) -> Self {
         Self::Standard(Box::new(StandardVerifier {
             verifying_keys: Default::default(),
-            hmac,
-            variant,
+            hmac: hardcoded_hmac(),
+            variant: variant.into(),
         }))
+    }
+
+    pub fn insert_verifying_key(&mut self, index: ReplicaIndex, verifying_key: VerifyingKey) {
+        match self {
+            Self::Nop => {}
+            Self::Simulated => unimplemented!(),
+            Self::Standard(verifier) => {
+                let evicted = verifier.verifying_keys.insert(index, verifying_key);
+                assert!(evicted.is_none())
+            }
+        }
     }
 
     pub fn verify<M>(

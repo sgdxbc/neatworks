@@ -6,8 +6,6 @@
 use std::{collections::HashMap, net::SocketAddr, sync::Arc, time::Duration};
 
 use bincode::Options;
-use hmac::{Hmac, Mac};
-use k256::{ecdsa::SigningKey, sha2::Sha256};
 use rand::Rng;
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use tokio::{net::UdpSocket, runtime::Handle, sync::Mutex, task::JoinHandle};
@@ -18,7 +16,7 @@ use crate::context::crypto::Verifier;
 use super::{
     crypto::{DigestHash, Sign, Signer, Verify},
     ordered_multicast::{OrderedMulticast, Variant},
-    OrderedMulticastReceivers, Receivers, ReplicaIndex, To,
+    OrderedMulticastReceivers, Receivers, To,
 };
 
 #[derive(Debug, Clone)]
@@ -26,9 +24,7 @@ pub struct Config {
     pub num_faulty: usize,
     pub client_addrs: Vec<Addr>,
     pub replica_addrs: Vec<Addr>,
-    pub signing_keys: HashMap<Addr, SigningKey>, // for replicas
     pub multicast_addr: Option<SocketAddr>,
-    pub hmac: Hmac<Sha256>,
 }
 
 impl Config {
@@ -40,28 +36,14 @@ impl Config {
         let client_addrs = client_addrs.into();
         let replica_addrs = replica_addrs.into();
         assert!(num_faulty * 3 < replica_addrs.len());
-        let signing_keys = replica_addrs
-            .iter()
-            .enumerate()
-            .map(|(index, &addr)| (addr, Self::k256(index as _)))
-            .collect();
         Self {
             num_faulty,
             client_addrs,
             replica_addrs,
-            signing_keys,
             multicast_addr: None,
             // simplified symmetrical keys setup
             // also reduce client-side overhead a little bit by only need to sign once for broadcast
-            hmac: Hmac::new_from_slice("shared".as_bytes()).unwrap(),
         }
-    }
-
-    fn k256(index: ReplicaIndex) -> SigningKey {
-        let k = format!("replica-{index}");
-        let mut buf = [0; 32];
-        buf[..k.as_bytes().len()].copy_from_slice(k.as_bytes());
-        SigningKey::from_slice(&buf).unwrap()
     }
 }
 
@@ -456,11 +438,7 @@ mod tests {
             }
         }
 
-        let mut context = dispatch.register(
-            addr,
-            config.clone(),
-            Signer::new_standard(None, config.hmac),
-        );
+        let mut context = dispatch.register(addr, config.clone(), Signer::new_standard(None));
         let id = context.set(Duration::from_millis(10));
 
         let handle = dispatch.handle();

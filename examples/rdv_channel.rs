@@ -1,8 +1,8 @@
 fn main() {
     let ch0 = flume::bounded(0);
     let ch1 = flume::unbounded();
-    let _0 = ch0.0.clone();
-    let _1 = ch1.0.clone();
+    let _ch0 = ch0.0.clone();
+    let _ch1 = ch1.0.clone();
     let send0 = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
     let t0 = std::thread::spawn({
         let send0 = send0.clone();

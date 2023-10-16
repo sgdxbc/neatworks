@@ -15,7 +15,7 @@ use permissioned_blockchain::{
     client::{run_benchmark, RunBenchmarkConfig},
     common::set_affinity,
     context::{
-        crypto::{Signer, Verifier},
+        crypto::{hardcoded_k256, Signer, Verifier},
         ordered_multicast::Variant,
         tokio::{Config, Dispatch},
     },
@@ -113,11 +113,14 @@ async fn set_task(State(state): State<Arc<Mutex<AppState>>>, Json(task): Json<Ta
                         "neo-pk" | "neo-bn" => Variant::new_k256(),
                         _ => Variant::Unreachable,
                     });
-                    let mut dispatch = Dispatch::new(
-                        runtime.handle().clone(),
-                        Verifier::new_standard(context_config.hmac.clone(), variant.clone()),
-                        variant,
-                    );
+                    let mut verifier = Verifier::new_standard(variant.clone());
+                    for index in 0..context_config.replica_addrs.len() {
+                        verifier.insert_verifying_key(
+                            index as _,
+                            *hardcoded_k256(index as _).verifying_key(),
+                        )
+                    }
+                    let mut dispatch = Dispatch::new(runtime.handle().clone(), verifier, variant);
 
                     let handle = dispatch.handle();
                     std::thread::spawn(move || {
@@ -131,10 +134,7 @@ async fn set_task(State(state): State<Arc<Mutex<AppState>>>, Json(task): Json<Ta
 
                     set_affinity(1);
                     let addr = context_config.replica_addrs[replica.index as usize];
-                    let signer = Signer::new_standard(
-                        Some(context_config.signing_keys[&addr].clone()),
-                        context_config.hmac.clone(),
-                    );
+                    let signer = Signer::new_standard(hardcoded_k256(replica.index));
                     match &*task.mode {
                         "unreplicated" => {
                             assert_eq!(replica.index, 0);

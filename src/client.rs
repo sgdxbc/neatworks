@@ -218,11 +218,7 @@ where
                     let index = config.offset + group_index * config.num_client + group_offset;
                     let addr = context_config.client_addrs[index];
                     let client = new_client(
-                        dispatch.register(
-                            addr,
-                            context_config.clone(),
-                            Signer::new_standard(None, context_config.hmac.clone()),
-                        ),
+                        dispatch.register(addr, context_config.clone(), Signer::new_standard(None)),
                         index as _,
                     );
                     benchmark.insert_client(Addr::Socket(addr), client);
