@@ -25,6 +25,20 @@ async fn main() {
         rmw_portion: 10,
     });
     match std::env::args().nth(1).as_deref() {
+        Some("test") => {
+            run(
+                5,
+                200,
+                1,
+                "hotstuff",
+                App::Null,
+                0.,
+                1,
+                &[],
+                &mut std::io::empty(),
+            )
+            .await
+        }
         Some("fpga") => {
             let saved = std::fs::read_to_string("saved-fpga.csv").unwrap_or_default();
             let saved_lines = Vec::from_iter(saved.lines());

@@ -179,6 +179,7 @@ impl Receivers for Replica {
     type Message = Message;
 
     fn handle(&mut self, receiver: Addr, remote: Addr, message: Self::Message) {
+        // println!("{message:02x?}");
         assert_eq!(receiver, self.context.addr());
         match message {
             Message::Request(message) => self.handle_request(remote, message),

@@ -15,7 +15,7 @@ use permissioned_blockchain::{
     client::{run_benchmark, RunBenchmarkConfig},
     common::set_affinity,
     context::{
-        crypto::{hardcoded_k256, Signer, Verifier},
+        crypto::{Signer, Verifier},
         ordered_multicast::Variant,
         replication::Config,
         tokio::Dispatch,
@@ -130,12 +130,17 @@ async fn set_task(State(state): State<Arc<Mutex<AppState>>>, Json(task): Json<Ta
 
                     set_affinity(1);
                     let addr = replication_config.replica_addrs[replica.index as usize];
-                    let signer = Signer::new_standard(hardcoded_k256(replica.index));
+                    let signer = Signer::new_standard(
+                        permissioned_blockchain::context::crypto::hardcoded_ed25519(replica.index),
+                        // permissioned_blockchain::context::crypto::hardcoded_k256(replica.index),
+                    );
                     let mut verifier = Verifier::new_standard(variant);
                     for index in 0..replication_config.replica_addrs.len() {
                         verifier.insert_verifying_key(
                             index as _,
-                            hardcoded_k256(index as _).verifying_key(),
+                            permissioned_blockchain::context::crypto::hardcoded_ed25519(index as _)
+                                // permissioned_blockchain::context::crypto::hardcoded_k256(index as _)
+                                .verifying_key(),
                         )
                     }
                     match &*task.mode {

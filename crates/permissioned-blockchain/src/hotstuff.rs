@@ -419,7 +419,7 @@ impl Sign<Generic> for Message {
 
 impl Sign<Vote> for Message {
     fn sign(message: Vote, signer: &crate::context::crypto::Signer) -> Self {
-        Self::Vote(signer.sign_public(message))
+        Self::Vote(signer.sign_public_for_batch(message))
     }
 }
 

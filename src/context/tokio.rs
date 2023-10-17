@@ -47,14 +47,15 @@ impl Context {
     where
         M: Sign<N> + Serialize,
     {
+        // println!("{to:?}");
         let message = M::sign(message, &self.signer);
         let buf = Bytes::from(bincode::options().serialize(&message).unwrap());
+        // println!("{buf:02x?}");
         if matches!(to, To::Loopback | To::AddrsWithLoopback(_)) {
             self.event
                 .send(Event::LoopbackMessage(self.source, buf.clone()))
                 .unwrap()
         }
-
         match to {
             To::Addr(addr) => self.send_buf(addr, buf.clone()),
             To::Addrs(addrs) | To::AddrsWithLoopback(addrs) => {
@@ -168,6 +169,7 @@ impl Dispatch {
             let mut buf = vec![0; 65536];
             loop {
                 let (len, remote) = socket.recv_from(&mut buf).await.unwrap();
+                // println!("{:02x?}", &buf[..len]);
                 // `try_send` here to minimize rx process latency, avoid hardware packet dropping
                 event
                     .try_send(Event::Message(addr, remote, buf[..len].to_vec()))

@@ -1,6 +1,6 @@
 use std::{collections::HashMap, hash::Hash, mem::take, ops::Deref, sync::Arc};
 
-use ed25519_dalek::Sha512;
+use ed25519_dalek::{Sha512, Signer as _, Verifier as _};
 use hmac::{Hmac, Mac};
 use k256::{
     ecdsa::signature::{DigestSigner, DigestVerifier},
@@ -34,6 +34,7 @@ pub enum Signature {
     SimulatedPublic,
     K256(k256::ecdsa::Signature),
     Ed25519(ed25519_dalek::Signature),
+    Ed25519Batched(ed25519_dalek::Signature),
     Hmac([u8; 32]),
 }
 
@@ -47,6 +48,7 @@ impl<M: DigestHash> Hash for Signed<M> {
             Signature::Plain | Signature::SimulatedPrivate | Signature::SimulatedPublic => {} // TODO
             Signature::K256(signature) => hasher.write(&signature.to_bytes()),
             Signature::Ed25519(signature) => hasher.write(&signature.to_bytes()),
+            Signature::Ed25519Batched(signature) => hasher.write(&signature.to_bytes()),
             Signature::Hmac(codes) => hasher.write(codes),
         }
     }
@@ -192,7 +194,7 @@ pub fn hardcoded_ed25519(index: ReplicaIndex) -> SigningKey {
 }
 
 pub fn hardcoded_hmac() -> Hmac<Sha256> {
-    Hmac::new_from_slice("shared".as_bytes()).unwrap()
+    Hmac::new_from_slice("hardcoded".as_bytes()).unwrap()
 }
 
 impl Signer {
@@ -213,6 +215,19 @@ impl Signer {
                 signature: Signature::SimulatedPublic,
             },
             Self::Standard(signer) => signer.sign_public(message),
+        }
+    }
+
+    pub fn sign_public_for_batch<M>(&self, message: M) -> Signed<M>
+    where
+        M: DigestHash,
+    {
+        match self {
+            Self::Simulated => Signed {
+                inner: message,
+                signature: Signature::SimulatedPublic,
+            },
+            Self::Standard(signer) => signer.sign_public_for_batch(message),
         }
     }
 
@@ -237,12 +252,10 @@ impl StandardSigner {
     {
         let signature = match self.signing_key.as_ref().unwrap() {
             SigningKey::K256(signing_key) => {
-                let digest = Hasher::sha256(&message);
-                Signature::K256(signing_key.sign_digest(digest))
+                Signature::K256(signing_key.sign_digest(Hasher::sha256(&message)))
             }
             SigningKey::Ed25519(signing_key) => {
-                let digest = Hasher::sha512(&message);
-                Signature::Ed25519(signing_key.sign_digest(digest))
+                Signature::Ed25519(signing_key.sign_digest(Hasher::sha512(&message)))
             }
         };
         Signed {
@@ -251,10 +264,25 @@ impl StandardSigner {
         }
     }
 
+    fn sign_public_for_batch<M>(&self, message: M) -> Signed<M>
+    where
+        M: DigestHash,
+    {
+        if let SigningKey::Ed25519(signing_key) = self.signing_key.as_ref().unwrap() {
+            Signed {
+                signature: Signature::Ed25519Batched(signing_key.sign(&Hasher::bytes(&message))),
+                inner: message,
+            }
+        } else {
+            self.sign_public(message)
+        }
+    }
+
     fn sign_private<M>(&self, message: M) -> Signed<M>
     where
         M: DigestHash,
     {
+        // println!("{:02x?}", Hasher::bytes(&message));
         let mut hmac = self.hmac.clone();
         Hasher::hmac_update(&message, &mut hmac);
         Signed {
@@ -345,8 +373,9 @@ impl<I> Verifier<I> {
             (Self::Simulated, Signature::SimulatedPrivate | Signature::SimulatedPublic) => Ok(()),
             (Self::Simulated, _) => unimplemented!(),
             (Self::Standard(verifier), Signature::Hmac(code)) => {
+                // println!("{:02x?}", Hasher::bytes(&message));
                 let mut hmac = verifier.hmac.clone();
-                Hasher::hmac_update(message, &mut hmac);
+                Hasher::hmac_update(&message.inner, &mut hmac);
                 hmac.verify(code.into()).map_err(|_| Invalid::Private)
             }
             (Self::Standard(verifier), signature) => {
@@ -356,14 +385,20 @@ impl<I> Verifier<I> {
                 ) {
                     (VerifyingKey::K256(verifying_key), Signature::K256(signature)) => {
                         verifying_key
-                            .verify_digest(Hasher::sha256(&**message), signature)
+                            .verify_digest(Hasher::sha256(&message.inner), signature)
                             .map_err(|_| Invalid::Public)
                     }
                     (VerifyingKey::Ed25519(verifying_key), Signature::Ed25519(signature)) => {
                         verifying_key
-                            .verify_digest(Hasher::sha512(&**message), signature)
+                            .verify_digest(Hasher::sha512(&message.inner), signature)
                             .map_err(|_| Invalid::Public)
                     }
+                    (
+                        VerifyingKey::Ed25519(verifying_key),
+                        Signature::Ed25519Batched(signature),
+                    ) => verifying_key
+                        .verify(&Hasher::bytes(&message.inner), signature)
+                        .map_err(|_| Invalid::Public),
                     _ => Err(Invalid::Variant),
                 }
             }
@@ -384,22 +419,18 @@ impl<I> Verifier<I> {
         let mut signatures = Vec::new();
         let mut verifying_keys = Vec::new();
         for (message, identity) in messages.iter().zip(identities) {
-            match (&message.signature, &verifier.verifying_keys[identity]) {
-                (&Signature::Ed25519(signature), &VerifyingKey::Ed25519(verifying_key)) => {
-                    bytes.push(Hasher::bytes(&message.inner));
-                    signatures.push(signature);
-                    verifying_keys.push(verifying_key)
+            let (&Signature::Ed25519Batched(signature), &VerifyingKey::Ed25519(verifying_key)) =
+                (&message.signature, &verifier.verifying_keys[identity])
+            else {
+                for (message, identity) in messages.iter().zip(identities) {
+                    self.verify(message, identity.clone())?
                 }
-                (Signature::Ed25519(_), _) | (_, VerifyingKey::Ed25519(_)) => {
-                    return Err(Invalid::Variant)
-                }
-                _ => {
-                    for (message, identity) in messages.iter().zip(identities) {
-                        self.verify(message, identity.clone())?
-                    }
-                    return Ok(());
-                }
-            }
+                return Ok(());
+            };
+
+            bytes.push(Hasher::bytes(&message.inner));
+            signatures.push(signature);
+            verifying_keys.push(verifying_key)
         }
         ed25519_dalek::verify_batch(
             &bytes.iter().map(AsRef::as_ref).collect::<Vec<_>>(),
