@@ -6,19 +6,19 @@ use crate::{
     client::BoxedConsume,
     common::{Block, BlockDigest, Chain, Request, Timer},
     context::{
-        crypto::{DigestHash, Sign, Signed, Verify},
+        crypto::{Sign, Signed, Verify},
         Addr, ClientIndex, Receivers,
     },
     App, Context, To,
 };
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum Message {
     Request(Signed<Request>),
     Reply(Signed<Reply>),
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct Reply {
     request_num: u32,
     result: Vec<u8>,
@@ -179,13 +179,6 @@ impl Receivers for Replica {
             }
             assert!(self.chain.next_execute().is_none())
         }
-    }
-}
-
-impl DigestHash for Reply {
-    fn hash(&self, hasher: &mut impl std::hash::Hasher) {
-        hasher.write_u32(self.request_num);
-        hasher.write(&self.result)
     }
 }
 

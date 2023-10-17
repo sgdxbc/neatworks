@@ -7,10 +7,7 @@ use nix::{
 };
 use serde::{Deserialize, Serialize};
 
-use crate::context::{
-    crypto::{DigestHash, Hasher},
-    ClientIndex, Context, TimerId,
-};
+use crate::context::{crypto::Hasher, ClientIndex, Context, TimerId};
 
 #[derive(Debug)]
 pub struct Timer {
@@ -44,36 +41,20 @@ pub fn set_affinity(index: usize) {
     sched_setaffinity(Pid::from_raw(0), &cpu_set).unwrap()
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct Request {
     pub client_index: ClientIndex,
     pub request_num: u32,
     pub op: Vec<u8>,
 }
 
-impl DigestHash for Request {
-    fn hash(&self, hasher: &mut impl std::hash::Hasher) {
-        hasher.write_u16(self.client_index);
-        hasher.write_u32(self.request_num);
-        hasher.write(&self.op)
-    }
-}
-
 pub type BlockDigest = [u8; 32];
 
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
 pub struct Block {
     pub requests: Vec<Request>,
     pub parent_digest: BlockDigest,
     pub height: u32,
-}
-
-impl DigestHash for Block {
-    fn hash(&self, hasher: &mut impl std::hash::Hasher) {
-        self.requests.hash(hasher);
-        hasher.write(&self.parent_digest);
-        hasher.write_u32(self.height)
-    }
 }
 
 impl Block {

@@ -12,7 +12,7 @@ use crate::{
     client::BoxedConsume,
     common::{Request, Timer},
     context::{
-        crypto::{DigestHash, Hasher, Sign, Signed, Verify},
+        crypto::{Hasher, Sign, Signed, Verify},
         ordered_multicast::{
             OrderedMulticast,
             Signature::{K256Unverified, K256},
@@ -22,7 +22,7 @@ use crate::{
     App, Context, To,
 };
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum Message {
     Request(OrderedMulticast<Request>),
     Reply(Signed<Reply>),
@@ -31,7 +31,7 @@ pub enum Message {
     QueryOk(QueryOk),
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct Reply {
     request_num: u32,
     result: Vec<u8>,
@@ -40,20 +40,20 @@ pub struct Reply {
     replica_index: ReplicaIndex,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct Confirm {
     digest: [u8; 32],
     op_nums: RangeInclusive<u32>,
     replica_index: ReplicaIndex,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct Query {
     op_num: u32,
     replica_index: ReplicaIndex,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct QueryOk {
     op_num: u32,
     request: OrderedMulticast<Request>,
@@ -477,32 +477,6 @@ impl Replica {
 impl From<OrderedMulticast<Request>> for Message {
     fn from(value: OrderedMulticast<Request>) -> Self {
         Self::Request(value)
-    }
-}
-
-impl DigestHash for Reply {
-    fn hash(&self, hasher: &mut impl std::hash::Hasher) {
-        hasher.write_u32(self.request_num);
-        hasher.write(&self.result);
-        hasher.write_u32(self.epoch_num);
-        hasher.write_u32(self.seq_num);
-        hasher.write_u8(self.replica_index)
-    }
-}
-
-impl DigestHash for Confirm {
-    fn hash(&self, hasher: &mut impl std::hash::Hasher) {
-        hasher.write(&self.digest);
-        hasher.write_u32(*self.op_nums.start());
-        hasher.write_u32(*self.op_nums.end());
-        hasher.write_u8(self.replica_index)
-    }
-}
-
-impl DigestHash for Query {
-    fn hash(&self, hasher: &mut impl std::hash::Hasher) {
-        hasher.write_u32(self.op_num);
-        hasher.write_u8(self.replica_index)
     }
 }
 

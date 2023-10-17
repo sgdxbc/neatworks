@@ -10,13 +10,13 @@ use crate::{
     client::BoxedConsume,
     common::{Block, BlockDigest, Chain, Request, Timer},
     context::{
-        crypto::{DigestHash, Sign, Signed, Verify},
+        crypto::{Sign, Signed, Verify},
         Addr, ClientIndex, Receivers, ReplicaIndex,
     },
     App, Context, To,
 };
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum Message {
     Request(Signed<Request>),
     OrderRequest(Signed<OrderRequest>),
@@ -25,27 +25,27 @@ pub enum Message {
     LocalCommit(Signed<LocalCommit>),
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct OrderRequest {
     view_num: u32,
     block: Block,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct SpecResponse {
     block: Block,
     results: Vec<Vec<u8>>,
     replica_index: ReplicaIndex,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct Commit {
     client_index: ClientIndex,
     block_digest: BlockDigest,
     responses: Vec<Signed<SpecResponse>>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct LocalCommit {
     block_digest: BlockDigest,
     replica_index: ReplicaIndex,
@@ -343,38 +343,6 @@ impl Replica {
         } {
             block = &self.order_requests[&block_digest].block
         }
-    }
-}
-
-impl DigestHash for OrderRequest {
-    fn hash(&self, hasher: &mut impl std::hash::Hasher) {
-        hasher.write_u32(self.view_num);
-        self.block.hash(hasher)
-    }
-}
-
-impl DigestHash for SpecResponse {
-    fn hash(&self, hasher: &mut impl std::hash::Hasher) {
-        self.block.hash(hasher);
-        for result in &self.results {
-            hasher.write(result)
-        }
-        hasher.write_u8(self.replica_index)
-    }
-}
-
-impl DigestHash for Commit {
-    fn hash(&self, hasher: &mut impl std::hash::Hasher) {
-        hasher.write_u16(self.client_index);
-        hasher.write(&self.block_digest);
-        self.responses.hash(hasher)
-    }
-}
-
-impl DigestHash for LocalCommit {
-    fn hash(&self, hasher: &mut impl std::hash::Hasher) {
-        hasher.write(&self.block_digest);
-        hasher.write_u8(self.replica_index)
     }
 }
 

@@ -1,4 +1,4 @@
-use std::sync::Arc;
+use std::{hash::Hash, ops::Deref, sync::Arc};
 
 use bincode::Options;
 use k256::{
@@ -25,7 +25,7 @@ pub fn serialize(message: &(impl Serialize + DigestHash)) -> Vec<u8> {
     .concat()
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct OrderedMulticast<M> {
     pub seq_num: u32,
     pub signature: Signature,
@@ -41,7 +41,7 @@ pub enum Signature {
     K256Unverified(k256::ecdsa::Signature),
 }
 
-impl<M> std::ops::Deref for OrderedMulticast<M> {
+impl<M> Deref for OrderedMulticast<M> {
     type Target = M;
 
     fn deref(&self) -> &Self::Target {
@@ -49,8 +49,11 @@ impl<M> std::ops::Deref for OrderedMulticast<M> {
     }
 }
 
-impl DigestHash for Signature {
-    fn hash(&self, hasher: &mut impl std::hash::Hasher) {
+impl Hash for Signature {
+    fn hash<H>(&self, hasher: &mut H)
+    where
+        H: std::hash::Hasher,
+    {
         match self {
             Self::HalfSipHash([code0, code1, code2, code3]) => {
                 hasher.write(&code0[..]);

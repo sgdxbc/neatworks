@@ -37,8 +37,11 @@ pub enum Signature {
     Hmac([u8; 32]),
 }
 
-impl<M: DigestHash> DigestHash for Signed<M> {
-    fn hash(&self, hasher: &mut impl std::hash::Hasher) {
+impl<M: DigestHash> Hash for Signed<M> {
+    fn hash<H>(&self, hasher: &mut H)
+    where
+        H: std::hash::Hasher,
+    {
         self.inner.hash(hasher);
         match &self.signature {
             Signature::Plain | Signature::SimulatedPrivate | Signature::SimulatedPublic => {} // TODO
@@ -90,11 +93,9 @@ pub trait DigestHash {
     fn hash(&self, hasher: &mut impl std::hash::Hasher);
 }
 
-impl<T: DigestHash> DigestHash for [T] {
+impl<T: Hash> DigestHash for T {
     fn hash(&self, hasher: &mut impl std::hash::Hasher) {
-        for item in self {
-            item.hash(hasher)
-        }
+        Hash::hash(self, hasher)
     }
 }
 

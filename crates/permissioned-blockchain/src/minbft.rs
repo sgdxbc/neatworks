@@ -10,13 +10,13 @@ use crate::{
     client::BoxedConsume,
     common::{Block, BlockDigest, Chain, Request, Timer},
     context::{
-        crypto::{DigestHash, Sign, Signature, Signed, Verify},
+        crypto::{Sign, Signature, Signed, Verify},
         Addr, ClientIndex, Receivers, ReplicaIndex,
     },
     App, Context, To,
 };
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum Message {
     Request(Signed<Request>),
     Reply(Signed<Reply>),
@@ -24,7 +24,7 @@ pub enum Message {
     Commit(Signed<Commit>),
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct Reply {
     request_num: u32,
     result: Vec<u8>,
@@ -32,13 +32,13 @@ pub struct Reply {
     replica_index: ReplicaIndex,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct Prepare {
     view_num: u32,
     block: Block,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct Commit {
     view_num: u32,
     block_digest: BlockDigest,
@@ -297,30 +297,6 @@ impl Replica {
                 break;
             }
         }
-    }
-}
-
-impl DigestHash for Reply {
-    fn hash(&self, hasher: &mut impl std::hash::Hasher) {
-        hasher.write_u32(self.request_num);
-        hasher.write(&self.result);
-        hasher.write(&self.block_digest);
-        hasher.write_u8(self.replica_index)
-    }
-}
-
-impl DigestHash for Prepare {
-    fn hash(&self, hasher: &mut impl std::hash::Hasher) {
-        hasher.write_u32(self.view_num);
-        self.block.hash(hasher)
-    }
-}
-
-impl DigestHash for Commit {
-    fn hash(&self, hasher: &mut impl std::hash::Hasher) {
-        hasher.write_u32(self.view_num);
-        hasher.write(&self.block_digest);
-        hasher.write_u8(self.replica_index)
     }
 }
 

@@ -10,13 +10,13 @@ use crate::{
     client::BoxedConsume,
     common::{Block, BlockDigest, Chain, Request, Timer},
     context::{
-        crypto::{DigestHash, Sign, Signed, Verify},
+        crypto::{Sign, Signed, Verify},
         Addr, ClientIndex, Receivers, ReplicaIndex,
     },
     App, Context, To,
 };
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum Message {
     Request(Signed<Request>),
     Reply(Signed<Reply>),
@@ -24,14 +24,14 @@ pub enum Message {
     Vote(Signed<Vote>),
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct Reply {
     request_num: u32,
     result: Vec<u8>,
     replica_index: ReplicaIndex,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct Generic {
     block: Block,
     certified_digest: BlockDigest,
@@ -39,7 +39,7 @@ pub struct Generic {
     replica_index: ReplicaIndex,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct Vote {
     block_digest: BlockDigest,
     replica_index: ReplicaIndex,
@@ -396,30 +396,6 @@ impl Replica {
 
     fn block_height(&self, block_digest: &BlockDigest) -> u32 {
         self.generics[block_digest].block.height
-    }
-}
-
-impl DigestHash for Reply {
-    fn hash(&self, hasher: &mut impl std::hash::Hasher) {
-        hasher.write_u32(self.request_num);
-        hasher.write(&self.result);
-        hasher.write_u8(self.replica_index)
-    }
-}
-
-impl DigestHash for Generic {
-    fn hash(&self, hasher: &mut impl std::hash::Hasher) {
-        self.block.hash(hasher);
-        hasher.write(&self.certified_digest);
-        self.certificate.hash(hasher);
-        hasher.write_u8(self.replica_index)
-    }
-}
-
-impl DigestHash for Vote {
-    fn hash(&self, hasher: &mut impl std::hash::Hasher) {
-        hasher.write(&self.block_digest);
-        hasher.write_u8(self.replica_index)
     }
 }
 
