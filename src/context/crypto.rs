@@ -1,9 +1,9 @@
-use std::{collections::HashMap, hash::Hash, mem::take, sync::Arc};
+use std::{collections::HashMap, hash::Hash, mem::take, ops::Deref, sync::Arc};
 
 use ed25519_dalek::Sha512;
 use hmac::{Hmac, Mac};
 use k256::{
-    schnorr::signature::{DigestSigner, DigestVerifier},
+    ecdsa::signature::{DigestSigner, DigestVerifier},
     sha2::{Digest, Sha256},
 };
 use serde::{Deserialize, Serialize};
@@ -19,7 +19,7 @@ pub struct Signed<M> {
     pub signature: Signature,
 }
 
-impl<M> std::ops::Deref for Signed<M> {
+impl<M> Deref for Signed<M> {
     type Target = M;
 
     fn deref(&self) -> &Self::Target {
@@ -182,6 +182,13 @@ pub fn hardcoded_k256(index: ReplicaIndex) -> SigningKey {
     let mut buf = [0; 32];
     buf[..k.as_bytes().len()].copy_from_slice(k.as_bytes());
     SigningKey::K256(k256::ecdsa::SigningKey::from_slice(&buf).unwrap())
+}
+
+pub fn hardcoded_ed25519(index: ReplicaIndex) -> SigningKey {
+    let k = format!("hardcoded-{index}");
+    let mut buf = [0; 32];
+    buf[..k.as_bytes().len()].copy_from_slice(k.as_bytes());
+    SigningKey::Ed25519(ed25519_dalek::SigningKey::from_bytes(&buf))
 }
 
 pub fn hardcoded_hmac() -> Hmac<Sha256> {
@@ -361,6 +368,45 @@ impl<I> Verifier<I> {
                 }
             }
         }
+    }
+
+    pub fn verify_batch<M>(&self, messages: &[Signed<M>], identities: &[I]) -> Result<(), Invalid>
+    where
+        M: DigestHash,
+        I: Hash + Eq + Clone,
+    {
+        let verifier = match self {
+            Self::Nop => return Ok(()),
+            Self::Simulated => todo!(),
+            Self::Standard(verifier) => verifier,
+        };
+        let mut bytes = Vec::new();
+        let mut signatures = Vec::new();
+        let mut verifying_keys = Vec::new();
+        for (message, identity) in messages.iter().zip(identities) {
+            match (&message.signature, &verifier.verifying_keys[identity]) {
+                (&Signature::Ed25519(signature), &VerifyingKey::Ed25519(verifying_key)) => {
+                    bytes.push(Hasher::bytes(&message.inner));
+                    signatures.push(signature);
+                    verifying_keys.push(verifying_key)
+                }
+                (Signature::Ed25519(_), _) | (_, VerifyingKey::Ed25519(_)) => {
+                    return Err(Invalid::Variant)
+                }
+                _ => {
+                    for (message, identity) in messages.iter().zip(identities) {
+                        self.verify(message, identity.clone())?
+                    }
+                    return Ok(());
+                }
+            }
+        }
+        ed25519_dalek::verify_batch(
+            &bytes.iter().map(AsRef::as_ref).collect::<Vec<_>>(),
+            &signatures,
+            &verifying_keys,
+        )
+        .map_err(|_| Invalid::Public)
     }
 
     pub fn verify_ordered_multicast<M>(&self, message: &OrderedMulticast<M>) -> Result<(), Invalid>

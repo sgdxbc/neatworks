@@ -437,10 +437,14 @@ impl Verify<ReplicaIndex> for Message {
                     return Ok(());
                 }
                 // TODO check certification size
-                for vote in &message.certificate {
-                    verifier.verify(vote, vote.replica_index)?
-                }
-                Ok(())
+                verifier.verify_batch(
+                    &message.certificate,
+                    &message
+                        .certificate
+                        .iter()
+                        .map(|vote| vote.replica_index)
+                        .collect::<Vec<_>>(),
+                )
             }
             Self::Vote(message) => verifier.verify(message, message.replica_index),
         }
