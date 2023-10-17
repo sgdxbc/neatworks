@@ -8,8 +8,11 @@ use serde::Serialize;
 
 use super::{
     crypto::{DigestHash, Sign},
-    Addr, ClientIndex, ReplicaIndex,
+    Addr,
 };
+
+pub type ReplicaIndex = u8;
+pub type ClientIndex = u16;
 
 #[derive(Debug, Clone)]
 pub struct Config {

@@ -17,11 +17,10 @@ use permissioned_blockchain::{
     context::{
         crypto::{Signer, Verifier},
         ordered_multicast::Variant,
-        replication::Config,
         tokio::Dispatch,
         Addr,
     },
-    hotstuff, minbft, neo, pbft, unreplicated, zyzzyva, App,
+    hotstuff, minbft, neo, pbft, unreplicated, zyzzyva, App, Config,
 };
 use rand::{rngs::StdRng, SeedableRng};
 use tokio::task::JoinHandle;

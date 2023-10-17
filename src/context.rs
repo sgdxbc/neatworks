@@ -6,9 +6,6 @@ pub mod replication;
 pub mod simulated;
 pub mod tokio;
 
-pub type ReplicaIndex = u8;
-pub type ClientIndex = u16;
-
 #[derive(Debug)]
 pub enum Context<M> {
     Tokio(tokio::Context),

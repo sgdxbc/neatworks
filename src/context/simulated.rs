@@ -6,7 +6,8 @@ use std::{
 
 use super::{
     crypto::{Sign, Signer},
-    ClientIndex, Receivers, ReplicaIndex, To,
+    replication::{ClientIndex, ReplicaIndex},
+    Receivers, To,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]

@@ -17,9 +17,9 @@ use crate::{
             OrderedMulticast,
             Signature::{K256Unverified, K256},
         },
-        Addr, ClientIndex, OrderedMulticastReceivers, Receivers, ReplicaIndex,
+        Addr, OrderedMulticastReceivers, Receivers,
     },
-    App, Context, To,
+    App, ClientIndex, Context, ReplicaIndex, To,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]

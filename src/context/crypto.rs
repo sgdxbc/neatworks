@@ -10,7 +10,7 @@ use serde::{Deserialize, Serialize};
 
 use super::{
     ordered_multicast::{OrderedMulticast, Variant},
-    ReplicaIndex,
+    replication::ReplicaIndex,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

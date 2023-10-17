@@ -7,7 +7,7 @@ use nix::{
 };
 use serde::{Deserialize, Serialize};
 
-use crate::context::{crypto::Hasher, ClientIndex, Context, TimerId};
+use crate::context::{crypto::Hasher, Context, TimerId};
 
 #[derive(Debug)]
 pub struct Timer {
@@ -43,7 +43,7 @@ pub fn set_affinity(index: usize) {
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct Request {
-    pub client_index: ClientIndex,
+    pub client_index: crate::ClientIndex,
     pub request_num: u32,
     pub op: Vec<u8>,
 }

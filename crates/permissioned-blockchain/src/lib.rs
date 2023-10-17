@@ -12,5 +12,5 @@ pub use app::App;
 pub use client::Client;
 pub use neat::context::{
     self,
-    replication::{Context, To},
+    replication::{ClientIndex, Config, Context, ReplicaIndex, To},
 };

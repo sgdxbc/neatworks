@@ -7,9 +7,9 @@ use crate::{
     common::{Block, BlockDigest, Chain, Request, Timer},
     context::{
         crypto::{Sign, Signed, Verify},
-        Addr, ClientIndex, Receivers,
+        Addr, Receivers,
     },
-    App, Context, To,
+    App, ClientIndex, Context, ReplicaIndex, To,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -194,10 +194,10 @@ impl Sign<Reply> for Message {
     }
 }
 
-impl Verify<crate::context::ReplicaIndex> for Message {
+impl Verify<ReplicaIndex> for Message {
     fn verify(
         &self,
-        verifier: &crate::context::crypto::Verifier<crate::context::ReplicaIndex>,
+        verifier: &crate::context::crypto::Verifier<ReplicaIndex>,
     ) -> Result<(), crate::context::crypto::Invalid> {
         match self {
             Self::Request(message) => verifier.verify(message, None),

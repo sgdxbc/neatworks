@@ -16,8 +16,9 @@ use crate::{
         crypto::{Signer, Verifier, Verify},
         ordered_multicast::Variant,
         tokio::{Dispatch, DispatchHandle},
-        Addr, ClientIndex, ReplicaIndex,
+        Addr,
     },
+    ClientIndex, ReplicaIndex,
 };
 
 pub trait OnResult {
@@ -170,13 +171,17 @@ impl<C> Benchmark<C> {
 
 #[derive(Debug)]
 pub struct RunBenchmarkConfig {
-    pub replication_config: crate::context::replication::Config,
+    pub replication_config: crate::Config,
     pub offset: usize,
     pub num_group: usize,
     pub num_client: usize,
     pub duration: Duration,
     pub workload: Workload,
 }
+
+// a benchmark runner that is already almost decoupled with replication
+// just a few tweak away from lifting into context library
+// maybe do so when there's other uses than in this crate
 
 pub fn run_benchmark<C>(
     config: RunBenchmarkConfig,

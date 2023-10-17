@@ -10,7 +10,8 @@ use serde::{de::DeserializeOwned, Deserialize, Serialize};
 
 use super::{
     crypto::{DigestHash, Hasher, Invalid, Verifier, Verify},
-    Addr, Receivers, ReplicaIndex,
+    replication::ReplicaIndex,
+    Addr, Receivers,
 };
 
 pub fn serialize(message: &(impl Serialize + DigestHash)) -> Vec<u8> {
