@@ -168,7 +168,22 @@ There for sure are hardware counters that can indicate packet dropping, but deal
 In this project, the rx packets are immediately relayed into an unbounded in-memory channel, with zero processing, not even deserialization (which introduces a tradeoff to copy messages one more time).
 Unbounded channel is not perfect for propagating back pressure, but we already have close loop setup, and propagating back pressure into a size-limited hardware ring buffer is not a good idea anyway.
 
-One downside of this solution is that it requires two threads at minimum.
+Using an explicit software queue instead of an implicit hardware one has extra benefits.
+We are able to monitor queue length in real time easily, giving protocols more information to decide how to batch.
+Batching is critical to BFT protocols, and it's difficult if not impossible to certain protocols, e.g., NeoBFT and Zyzzyva, to do batching right because of the lack of cross-replica coordination in the fast path.
+Without talking to other replicas, the only meaningful batching indicator would be local workload stress, which can be inferred from rx queue length.
+
+In this project the runtime context supports a \emph{pace-based} batching solution.
+Protocols can provide an extra callback, and \texttt{Dispatch} will call it once per pace.
+Every time after the callback is called, \texttt{Dispatch} will check the current queue length, and set the next pace as when the latest packet currently in the queue has been processed.
+Pace interval will be adaptive to workload.
+If packets are arriving faster than processing speed, queue length will increase and the following pace interval will be larger.
+Even if packets suddenly do not arrive anymore, the next pace will still happen when the queue is exhausted, and every following packet will cause a pace.
+\sgd{Try to show some formula.}
+
+Pace-based batching is being used to implement all BFT protocols, and it works great for most of them, especially NeoBFT, PBFT and MinBFT.
+
+One downside of out-of-line message delivery is that it requires two threads at minimum.
 There will be some scheduling overhead if you really need to run replica with single hardware thread.
 
 For simplicity, the rx thread also do tx for now.
