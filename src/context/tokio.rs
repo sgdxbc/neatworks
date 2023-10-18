@@ -48,7 +48,50 @@ pub struct Context<M> {
     timer_lock: Arc<Mutex<Vec<Event>>>,
     event: flume::Sender<Event>,
     rdv_event: flume::Sender<Event>,
-    get_buf: Arc<dyn Fn(M) -> Vec<u8> + Send + Sync>,
+    get_buf: Box<dyn GetBuf<M> + Send + Sync>,
+}
+
+trait GetBuf<M> {
+    fn get_buf(&self, message: M) -> Vec<u8>
+    where
+        M: Serialize;
+
+    fn boxed_clone(&self) -> Box<dyn GetBuf<M> + Send + Sync>;
+}
+
+#[derive(Debug, Clone, Copy)]
+struct Bincode;
+
+impl<M> GetBuf<M> for Bincode {
+    fn get_buf(&self, message: M) -> Vec<u8>
+    where
+        M: Serialize,
+    {
+        bincode::options().serialize(&message).unwrap()
+    }
+
+    fn boxed_clone(&self) -> Box<dyn GetBuf<M> + Send + Sync> {
+        Box::new(Bincode)
+    }
+}
+
+struct Wrap<M>(Box<dyn GetBuf<M> + Send + Sync>);
+
+impl<M, N> GetBuf<N> for Wrap<M>
+where
+    N: Into<M>,
+    M: Serialize + 'static,
+{
+    fn get_buf(&self, message: N) -> Vec<u8>
+    where
+        N: Serialize,
+    {
+        self.0.get_buf(message.into())
+    }
+
+    fn boxed_clone(&self) -> Box<dyn GetBuf<N> + Send + Sync> {
+        Box::new(Self(self.0.boxed_clone()))
+    }
 }
 
 impl<M> std::fmt::Debug for Context<M> {
@@ -65,7 +108,7 @@ impl<M> Context<M> {
     {
         // println!("{to:?}");
         let message = N::sign(message, &self.signer).into();
-        let buf = Bytes::from((self.get_buf)(message));
+        let buf = Bytes::from(self.get_buf.get_buf(message));
         // println!("{buf:02x?}");
         if matches!(
             to,
@@ -110,7 +153,6 @@ impl<M> Context<M> {
         N: Into<M>,
         M: Serialize + 'static,
     {
-        let get_buf = self.get_buf.clone();
         Context {
             source: self.source,
             socket: self.socket.clone(),
@@ -121,7 +163,7 @@ impl<M> Context<M> {
             timer_lock: self.timer_lock.clone(),
             event: self.event.clone(),
             rdv_event: self.rdv_event.clone(),
-            get_buf: Arc::new(move |message| get_buf(message.into())),
+            get_buf: Box::new(Wrap(self.get_buf.boxed_clone())),
         }
     }
 }
@@ -183,10 +225,7 @@ impl Dispatch {
         }
     }
 
-    pub fn register<M>(&self, addr: Addr, signer: impl Into<Arc<Signer>>) -> super::Context<M>
-    where
-        M: Serialize,
-    {
+    pub fn register<M>(&self, addr: Addr, signer: impl Into<Arc<Signer>>) -> super::Context<M> {
         let Addr::Socket(addr) = addr else {
             unimplemented!()
         };
@@ -206,7 +245,7 @@ impl Dispatch {
             timer_lock: self.timer_lock.clone(),
             event: self.event.0.clone(),
             rdv_event: self.rdv_event.0.clone(),
-            get_buf: Arc::new(|message| bincode::options().serialize(&message).unwrap()),
+            get_buf: Box::new(Bincode),
         };
         let event = self.event.0.clone();
         self.runtime.spawn(async move {
