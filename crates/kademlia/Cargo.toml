@@ -7,4 +7,5 @@ edition = "2021"
 
 [dependencies]
 neat = { version = "0.1.0", path = "../.." }
+num-bigint = "0.4.4"
 serde = { version = "1.0.189", features = ["derive"] }
