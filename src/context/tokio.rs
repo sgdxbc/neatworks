@@ -3,7 +3,16 @@
 //! Although supported by an asynchronous reactor, protocol code, i.e.,
 //! `impl Receivers` is still synchronous and running in a separated thread.
 
-use std::{borrow::Borrow, collections::HashMap, net::SocketAddr, sync::Arc, time::Duration};
+use std::{
+    borrow::Borrow,
+    collections::HashMap,
+    net::SocketAddr,
+    sync::{
+        atomic::{AtomicU32, Ordering::SeqCst},
+        Arc,
+    },
+    time::Duration,
+};
 
 use bincode::Options;
 use rand::Rng;
@@ -30,28 +39,34 @@ enum Event {
 }
 
 #[derive(Debug)]
-pub struct Context {
+pub struct Context<M> {
     socket: Arc<UdpSocket>,
     runtime: Handle,
     pub source: SocketAddr,
-    signer: Signer,
-    timer_id: TimerId,
+    signer: Arc<Signer>,
+    timer_id: Arc<AtomicU32>,
     timer_tasks: HashMap<TimerId, JoinHandle<()>>,
     timer_lock: Arc<Mutex<Vec<Event>>>,
     event: flume::Sender<Event>,
     rdv_event: flume::Sender<Event>,
+    _phantom: std::marker::PhantomData<M>,
 }
 
-impl Context {
-    pub fn send<M, N>(&self, to: To, message: N)
+impl<M> Context<M> {
+    pub fn send<N, O>(&self, to: To, message: O)
     where
-        M: Sign<N> + Serialize,
+        N: Sign<O> + Into<M>,
+        M: Serialize,
     {
         // println!("{to:?}");
-        let message = M::sign(message, &self.signer);
+        let message = N::sign(message, &self.signer).into();
         let buf = Bytes::from(bincode::options().serialize(&message).unwrap());
         // println!("{buf:02x?}");
-        if matches!(to, To::Loopback | To::AddrsWithLoopback(_)) {
+        if matches!(
+            to,
+            // disallow root context to send to upcall?
+            To::Loopback | To::AddrsWithLoopback(_) | To::Addr(Addr::Upcall)
+        ) {
             self.event
                 .send(Event::LoopbackMessage(self.source, buf.clone()))
                 .unwrap()
@@ -83,6 +98,21 @@ impl Context {
     pub fn idle_hint(&self) -> bool {
         self.event.is_empty()
     }
+
+    pub fn subnode<N>(&self) -> Context<N> {
+        Context {
+            source: self.source,
+            socket: self.socket.clone(),
+            runtime: self.runtime.clone(),
+            signer: self.signer.clone(),
+            timer_id: self.timer_id.clone(),
+            timer_tasks: Default::default(),
+            timer_lock: self.timer_lock.clone(),
+            event: self.event.clone(),
+            rdv_event: self.rdv_event.clone(),
+            _phantom: Default::default(),
+        }
+    }
 }
 
 pub type TimerId = u32;
@@ -95,10 +125,9 @@ pub type TimerId = u32;
 // allowed to be spurious
 // i believe the original solution should also work for multithreading runtime
 
-impl Context {
+impl<M> Context<M> {
     pub fn set(&mut self, duration: Duration) -> TimerId {
-        self.timer_id += 1;
-        let id = self.timer_id;
+        let id = self.timer_id.fetch_add(1, SeqCst) + 1;
         let event = self.rdv_event.clone();
         let source = self.source;
         let timer_lock = self.timer_lock.clone();
@@ -143,7 +172,7 @@ impl Dispatch {
         }
     }
 
-    pub fn register<M>(&self, addr: Addr, signer: Signer) -> super::Context<M> {
+    pub fn register<M>(&self, addr: Addr, signer: impl Into<Arc<Signer>>) -> super::Context<M> {
         let Addr::Socket(addr) = addr else {
             unimplemented!()
         };
@@ -157,12 +186,13 @@ impl Dispatch {
             socket: socket.clone(),
             runtime: self.runtime.clone(),
             source: addr,
-            signer,
+            signer: signer.into(),
             timer_id: Default::default(),
             timer_tasks: Default::default(),
             timer_lock: self.timer_lock.clone(),
             event: self.event.0.clone(),
             rdv_event: self.rdv_event.0.clone(),
+            _phantom: Default::default(),
         };
         let event = self.event.0.clone();
         self.runtime.spawn(async move {

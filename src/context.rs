@@ -8,7 +8,7 @@ pub mod tokio;
 
 #[derive(Debug)]
 pub enum Context<M> {
-    Tokio(tokio::Context),
+    Tokio(tokio::Context<M>),
     Simulated(simulated::Context<M>),
 }
 
@@ -17,6 +17,7 @@ pub enum Addr {
     Socket(std::net::SocketAddr),
     Simulated(simulated::Addr),
     Multicast,
+    Upcall,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -48,6 +49,16 @@ impl<M> Context<M> {
     pub fn send_buf(&self, addr: Addr, buf: impl AsRef<[u8]> + Send + Sync + 'static) {
         match self {
             Self::Tokio(context) => context.send_buf(addr, buf),
+            Self::Simulated(_) => todo!(),
+        }
+    }
+
+    pub fn subnode<N>(&self) -> Context<N>
+    where
+        N: Into<M>,
+    {
+        match self {
+            Self::Tokio(context) => Context::Tokio(context.subnode()),
             Self::Simulated(_) => todo!(),
         }
     }
