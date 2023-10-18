@@ -4,13 +4,15 @@ use std::{
     time::Duration,
 };
 
+use serde::{Deserialize, Serialize};
+
 use super::{
     crypto::{Sign, Signer},
     replication::{ClientIndex, ReplicaIndex},
     Receivers, To,
 };
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub enum Addr {
     Replica(ReplicaIndex),
     Client(ClientIndex),

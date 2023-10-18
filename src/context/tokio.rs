@@ -38,7 +38,6 @@ enum Event {
     Stop,
 }
 
-#[derive(Debug)]
 pub struct Context<M> {
     socket: Arc<UdpSocket>,
     runtime: Handle,
@@ -49,7 +48,13 @@ pub struct Context<M> {
     timer_lock: Arc<Mutex<Vec<Event>>>,
     event: flume::Sender<Event>,
     rdv_event: flume::Sender<Event>,
-    _phantom: std::marker::PhantomData<M>,
+    get_buf: Arc<dyn Fn(M) -> Vec<u8> + Send + Sync>,
+}
+
+impl<M> std::fmt::Debug for Context<M> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "Context(..)")
+    }
 }
 
 impl<M> Context<M> {
@@ -60,7 +65,7 @@ impl<M> Context<M> {
     {
         // println!("{to:?}");
         let message = N::sign(message, &self.signer).into();
-        let buf = Bytes::from(bincode::options().serialize(&message).unwrap());
+        let buf = Bytes::from((self.get_buf)(message));
         // println!("{buf:02x?}");
         if matches!(
             to,
@@ -72,6 +77,7 @@ impl<M> Context<M> {
                 .unwrap()
         }
         match to {
+            To::Addr(Addr::Upcall) => {}
             To::Addr(addr) => self.send_buf(addr, buf.clone()),
             To::Addrs(addrs) | To::AddrsWithLoopback(addrs) => {
                 for addr in addrs {
@@ -99,7 +105,12 @@ impl<M> Context<M> {
         self.event.is_empty()
     }
 
-    pub fn subnode<N>(&self) -> Context<N> {
+    pub fn subnode<N>(&self) -> Context<N>
+    where
+        N: Into<M>,
+        M: Serialize + 'static,
+    {
+        let get_buf = self.get_buf.clone();
         Context {
             source: self.source,
             socket: self.socket.clone(),
@@ -110,7 +121,7 @@ impl<M> Context<M> {
             timer_lock: self.timer_lock.clone(),
             event: self.event.clone(),
             rdv_event: self.rdv_event.clone(),
-            _phantom: Default::default(),
+            get_buf: Arc::new(move |message| get_buf(message.into())),
         }
     }
 }
@@ -172,7 +183,10 @@ impl Dispatch {
         }
     }
 
-    pub fn register<M>(&self, addr: Addr, signer: impl Into<Arc<Signer>>) -> super::Context<M> {
+    pub fn register<M>(&self, addr: Addr, signer: impl Into<Arc<Signer>>) -> super::Context<M>
+    where
+        M: Serialize,
+    {
         let Addr::Socket(addr) = addr else {
             unimplemented!()
         };
@@ -192,7 +206,7 @@ impl Dispatch {
             timer_lock: self.timer_lock.clone(),
             event: self.event.0.clone(),
             rdv_event: self.rdv_event.0.clone(),
-            _phantom: Default::default(),
+            get_buf: Arc::new(|message| bincode::options().serialize(&message).unwrap()),
         };
         let event = self.event.0.clone();
         self.runtime.spawn(async move {

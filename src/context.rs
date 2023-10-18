@@ -1,4 +1,4 @@
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 pub mod crypto;
 pub mod ordered_multicast;
@@ -12,7 +12,7 @@ pub enum Context<M> {
     Simulated(simulated::Context<M>),
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub enum Addr {
     Socket(std::net::SocketAddr),
     Simulated(simulated::Addr),
@@ -56,6 +56,7 @@ impl<M> Context<M> {
     pub fn subnode<N>(&self) -> Context<N>
     where
         N: Into<M>,
+        M: Serialize + 'static,
     {
         match self {
             Self::Tokio(context) => Context::Tokio(context.subnode()),
