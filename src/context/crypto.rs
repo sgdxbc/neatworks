@@ -39,17 +39,14 @@ pub enum Signature {
 }
 
 impl<M: DigestHash> Hash for Signed<M> {
-    fn hash<H>(&self, hasher: &mut H)
-    where
-        H: std::hash::Hasher,
-    {
-        self.inner.hash(hasher);
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.inner.hash(state);
         match &self.signature {
             Signature::Plain | Signature::SimulatedPrivate | Signature::SimulatedPublic => {} // TODO
-            Signature::K256(signature) => hasher.write(&signature.to_bytes()),
-            Signature::Ed25519(signature) => hasher.write(&signature.to_bytes()),
-            Signature::Ed25519Batched(signature) => hasher.write(&signature.to_bytes()),
-            Signature::Hmac(codes) => hasher.write(codes),
+            Signature::K256(signature) => Hash::hash(&signature.to_bytes(), state),
+            Signature::Ed25519(signature) => Hash::hash(&signature.to_bytes(), state),
+            Signature::Ed25519Batched(signature) => Hash::hash(&signature.to_bytes(), state),
+            Signature::Hmac(codes) => Hash::hash(codes, state),
         }
     }
 }
@@ -306,10 +303,19 @@ pub struct StandardVerifier<I> {
     variant: Arc<Variant>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum VerifyingKey {
     K256(k256::ecdsa::VerifyingKey),
     Ed25519(ed25519_dalek::VerifyingKey),
+}
+
+impl Hash for VerifyingKey {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        match self {
+            Self::K256(verifying_key) => Hash::hash(&verifying_key.to_sec1_bytes(), state),
+            Self::Ed25519(verifying_key) => Hash::hash(&verifying_key.to_bytes(), state),
+        }
+    }
 }
 
 impl SigningKey {
