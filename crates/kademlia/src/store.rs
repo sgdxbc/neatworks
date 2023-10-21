@@ -1,20 +1,24 @@
-use std::{
-    net::SocketAddr,
-    time::{Duration, SystemTime},
-};
+use std::time::{Duration, SystemTime};
 
-use neat::context::crypto::{Signed, VerifyingKey};
+use neat::context::{
+    crypto::{Signed, VerifyingKey},
+    Addr,
+};
 use primitive_types::U256;
 use serde::{Deserialize, Serialize};
 
 use crate::PeerId;
+
+pub fn distance(peer_id: &PeerId, target: &PeerId) -> U256 {
+    U256::from_big_endian(peer_id) ^ U256::from_big_endian(target)
+}
 
 #[derive(Debug, Clone)]
 pub struct Store {
     peer_id: PeerId,
     buckets: Vec<KBucket>,
     // sibling list?
-    bucket_size: usize,
+    pub bucket_size: usize,
     expire_duration: Duration,
 }
 
@@ -29,7 +33,7 @@ struct KBucket {
 pub struct PeerRecord {
     pub id: PeerId,
     pub verifying_key: VerifyingKey,
-    pub addr: SocketAddr,
+    pub addr: Addr,
     pub last_active: SystemTime,
 }
 
@@ -56,7 +60,7 @@ impl Store {
     }
 
     pub fn insert(&mut self, record: Signed<PeerRecord>) {
-        let bucket_index = Self::distance(&record.id, &self.peer_id).bits();
+        let bucket_index = distance(&record.id, &self.peer_id).bits();
         let bucket = &mut self.buckets[bucket_index];
         assert!(Self::fit_in(&record.id, bucket));
         for bucket_record in &mut bucket.records {
@@ -102,7 +106,7 @@ impl Store {
     }
 
     pub fn closest(&self, target: &PeerId, num_peer: usize) -> Vec<Signed<PeerRecord>> {
-        let bucket_index = Self::distance(target, &self.peer_id).bits();
+        let bucket_index = distance(target, &self.peer_id).bits();
         assert!(Self::fit_in(target, &self.buckets[bucket_index]));
         let mut candidates = Vec::new();
         for bucket in self.buckets[..=bucket_index]
@@ -111,7 +115,7 @@ impl Store {
             .chain(&self.buckets[bucket_index + 1..])
         {
             let mut records = bucket.records.clone();
-            records.sort_by_key(|record| Self::distance(&record.id, target));
+            records.sort_by_key(|record| distance(&record.id, target));
             candidates.extend(records);
             if candidates.len() >= num_peer {
                 break;
@@ -119,9 +123,5 @@ impl Store {
         }
         candidates.truncate(num_peer);
         candidates
-    }
-
-    fn distance(peer_id: &PeerId, target: &PeerId) -> U256 {
-        U256::from_big_endian(peer_id) ^ U256::from_big_endian(target)
     }
 }
