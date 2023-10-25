@@ -13,11 +13,11 @@ use crate::{
     app::Workload,
     common::set_affinity,
     context::{
-        crypto::{Signer, Verifier, Verify},
         ordered_multicast::Variant,
         tokio::{Multiplex, MultiplexHandle},
         Addr,
     },
+    crypto::{Signer, Verifier, Verify},
     ClientIndex, ReplicaIndex,
 };
 

@@ -12,13 +12,13 @@ use crate::{
     client::BoxedConsume,
     common::{Request, Timer},
     context::{
-        crypto::{Hasher, Sign, Signed, Verify},
         ordered_multicast::{
             OrderedMulticast,
             Signature::{K256Unverified, K256},
         },
-        Addr, OrderedMulticastReceive, MultiplexReceive,
+        Addr, MultiplexReceive, OrderedMulticastReceive,
     },
+    crypto::{Hasher, Sign, Signed, Verify},
     App, ClientIndex, Context, ReplicaIndex, To,
 };
 
@@ -481,19 +481,19 @@ impl From<OrderedMulticast<Request>> for Message {
 }
 
 impl Sign<Reply> for Message {
-    fn sign(message: Reply, signer: &crate::context::crypto::Signer) -> Self {
+    fn sign(message: Reply, signer: &crate::crypto::Signer) -> Self {
         Message::Reply(signer.sign_private(message))
     }
 }
 
 impl Sign<Confirm> for Message {
-    fn sign(message: Confirm, signer: &crate::context::crypto::Signer) -> Self {
+    fn sign(message: Confirm, signer: &crate::crypto::Signer) -> Self {
         Message::Confirm(signer.sign_public(message))
     }
 }
 
 impl Sign<Query> for Message {
-    fn sign(message: Query, signer: &crate::context::crypto::Signer) -> Self {
+    fn sign(message: Query, signer: &crate::crypto::Signer) -> Self {
         Message::Query(signer.sign_public(message))
     }
 }
@@ -507,8 +507,8 @@ impl From<QueryOk> for Message {
 impl Verify<ReplicaIndex> for Message {
     fn verify(
         &self,
-        verifier: &crate::context::crypto::Verifier<ReplicaIndex>,
-    ) -> Result<(), crate::context::crypto::Invalid> {
+        verifier: &crate::crypto::Verifier<ReplicaIndex>,
+    ) -> Result<(), crate::crypto::Invalid> {
         match self {
             Self::Request(message) => verifier.verify_ordered_multicast(message),
             Self::Reply(message) => verifier.verify(message, message.replica_index),

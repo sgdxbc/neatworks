@@ -1,8 +1,8 @@
 use std::time::{Duration, SystemTime};
 
-use neat::context::{
+use neat::{
+    context::Addr,
     crypto::{Signed, VerifyingKey},
-    Addr,
 };
 use primitive_types::U256;
 use serde::{Deserialize, Serialize};

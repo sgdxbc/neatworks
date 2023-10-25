@@ -1,12 +1,8 @@
 use std::{env::args, future::pending};
 
 use neat::{
-    context::{
-        crypto::{Signer, Verifier, Verify},
-        ordered_multicast::Variant,
-        tokio::Multiplex,
-        Addr, MultiplexReceive, To,
-    },
+    context::{ordered_multicast::Variant, tokio::Multiplex, Addr, MultiplexReceive, To},
+    crypto::{Signer, Verifier, Verify},
     Context,
 };
 use serde::{Deserialize, Serialize};
@@ -32,7 +28,7 @@ impl From<SubnodeMessage> for Message {
 }
 
 impl Verify<()> for Message {
-    fn verify(&self, _: &Verifier<()>) -> Result<(), neat::context::crypto::Invalid> {
+    fn verify(&self, _: &Verifier<()>) -> Result<(), neat::crypto::Invalid> {
         Ok(())
     }
 }

@@ -1,6 +1,7 @@
 use serde::{Deserialize, Serialize};
 
-pub mod crypto;
+use crate::crypto::Sign;
+
 pub mod ordered_multicast;
 pub mod replication;
 pub mod simulated;
@@ -38,7 +39,7 @@ impl<M> Context<M> {
 
     pub fn send<N>(&mut self, to: To, message: N)
     where
-        M: crypto::Sign<N> + Clone,
+        M: Sign<N> + Clone,
     {
         match self {
             Self::Tokio(context) => context.send(to, message),

@@ -6,8 +6,9 @@ use std::{
 
 use serde::{Deserialize, Serialize};
 
+use crate::crypto::{Sign, Signer};
+
 use super::{
-    crypto::{Sign, Signer},
     replication::{ClientIndex, ReplicaIndex},
     MultiplexReceive, To,
 };

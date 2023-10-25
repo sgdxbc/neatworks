@@ -6,10 +6,9 @@ use std::{
 
 use serde::Serialize;
 
-use super::{
-    crypto::{DigestHash, Sign},
-    Addr,
-};
+use crate::crypto::{DigestHash, Sign};
+
+use super::Addr;
 
 pub type ReplicaIndex = u8;
 pub type ClientIndex = u16;

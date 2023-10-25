@@ -14,12 +14,8 @@ use permissioned_blockchain::{
     app::{ycsb, Workload},
     client::{run_benchmark, RunBenchmarkConfig},
     common::set_affinity,
-    context::{
-        crypto::{Signer, Verifier},
-        ordered_multicast::Variant,
-        tokio::Multiplex,
-        Addr,
-    },
+    context::{ordered_multicast::Variant, tokio::Multiplex, Addr},
+    crypto::{Signer, Verifier},
     hotstuff, minbft, neo, pbft, unreplicated, zyzzyva, App, Config,
 };
 use rand::{rngs::StdRng, SeedableRng};
@@ -130,15 +126,15 @@ async fn set_task(State(state): State<Arc<Mutex<AppState>>>, Json(task): Json<Ta
                     set_affinity(1);
                     let addr = replication_config.replica_addrs[replica.index as usize];
                     let signer = Signer::new_standard(
-                        permissioned_blockchain::context::crypto::hardcoded_ed25519(replica.index),
+                        permissioned_blockchain::crypto::hardcoded_ed25519(replica.index as _),
                         // permissioned_blockchain::context::crypto::hardcoded_k256(replica.index),
                     );
                     let mut verifier = Verifier::new_standard(variant);
                     for index in 0..replication_config.replica_addrs.len() {
                         verifier.insert_verifying_key(
                             index as _,
-                            permissioned_blockchain::context::crypto::hardcoded_ed25519(index as _)
-                                // permissioned_blockchain::context::crypto::hardcoded_k256(index as _)
+                            permissioned_blockchain::crypto::hardcoded_ed25519(index)
+                                // permissioned_blockchain::context::crypto::hardcoded_k256(index)
                                 .verifying_key(),
                         )
                     }

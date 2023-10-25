@@ -5,10 +5,8 @@ use serde::{Deserialize, Serialize};
 use crate::{
     client::BoxedConsume,
     common::{Block, BlockDigest, Chain, Request, Timer},
-    context::{
-        crypto::{Sign, Signed, Verify},
-        Addr, MultiplexReceive,
-    },
+    context::{Addr, MultiplexReceive},
+    crypto::{Sign, Signed, Verify},
     App, ClientIndex, Context, ReplicaIndex, To,
 };
 
@@ -183,13 +181,13 @@ impl MultiplexReceive for Replica {
 }
 
 impl Sign<Request> for Message {
-    fn sign(message: Request, signer: &crate::context::crypto::Signer) -> Self {
+    fn sign(message: Request, signer: &crate::crypto::Signer) -> Self {
         Self::Request(signer.sign_private(message))
     }
 }
 
 impl Sign<Reply> for Message {
-    fn sign(message: Reply, signer: &crate::context::crypto::Signer) -> Self {
+    fn sign(message: Reply, signer: &crate::crypto::Signer) -> Self {
         Self::Reply(signer.sign_private(message))
     }
 }
@@ -197,8 +195,8 @@ impl Sign<Reply> for Message {
 impl Verify<ReplicaIndex> for Message {
     fn verify(
         &self,
-        verifier: &crate::context::crypto::Verifier<ReplicaIndex>,
-    ) -> Result<(), crate::context::crypto::Invalid> {
+        verifier: &crate::crypto::Verifier<ReplicaIndex>,
+    ) -> Result<(), crate::crypto::Invalid> {
         match self {
             Self::Request(message) => verifier.verify(message, None),
             Self::Reply(message) => verifier.verify(message, 0),

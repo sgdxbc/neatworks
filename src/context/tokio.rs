@@ -11,10 +11,9 @@ use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use tokio::{net::UdpSocket, runtime::Handle, sync::Mutex, task::JoinHandle};
 use tokio_util::bytes::Bytes;
 
-use crate::context::crypto::Verifier;
+use crate::crypto::{DigestHash, Sign, Signer, Verifier, Verify};
 
 use super::{
-    crypto::{DigestHash, Sign, Signer, Verify},
     ordered_multicast::{OrderedMulticast, Variant},
     Addr, MultiplexReceive, OrderedMulticastReceive, To,
 };
@@ -442,7 +441,7 @@ mod tests {
         #[derive(Serialize, Deserialize)]
         struct M;
         impl<I> Verify<I> for M {
-            fn verify(&self, _: &Verifier<I>) -> Result<(), crate::context::crypto::Invalid> {
+            fn verify(&self, _: &Verifier<I>) -> Result<(), crate::crypto::Invalid> {
                 Ok(())
             }
         }

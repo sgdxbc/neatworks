@@ -1,13 +1,14 @@
 use std::{collections::HashMap, time::Duration};
 
 use k256::sha2::Digest;
+use neat::crypto::Hasher;
 use nix::{
     sched::{sched_setaffinity, CpuSet},
     unistd::Pid,
 };
 use serde::{Deserialize, Serialize};
 
-use crate::context::{crypto::Hasher, Context, TimerId};
+use crate::context::{Context, TimerId};
 
 #[derive(Debug)]
 pub struct Timer {

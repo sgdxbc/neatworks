@@ -8,11 +8,9 @@ use k256::{
 };
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 
-use super::{
-    crypto::{DigestHash, Hasher, Invalid, Verifier, Verify},
-    replication::ReplicaIndex,
-    Addr, MultiplexReceive,
-};
+use crate::crypto::{DigestHash, Hasher, Invalid, Verifier, Verify};
+
+use super::{replication::ReplicaIndex, Addr, MultiplexReceive};
 
 pub fn serialize(message: &(impl Serialize + DigestHash)) -> Vec<u8> {
     let digest = Hasher::sha256(message).finalize();

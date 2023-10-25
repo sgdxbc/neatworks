@@ -8,10 +8,7 @@ use k256::{
 };
 use serde::{Deserialize, Serialize};
 
-use super::{
-    ordered_multicast::{OrderedMulticast, Variant},
-    replication::ReplicaIndex,
-};
+use crate::context::ordered_multicast::{OrderedMulticast, Variant};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Signed<M> {
@@ -51,6 +48,12 @@ impl<M: DigestHash> Hash for Signed<M> {
     }
 }
 
+// the `DigestHash::hash` was originally taking a `Hasher` directly and manually
+// implemented. now with blanket implementation of `DigestHash` this hasher
+// abstraction is a little bit redundant
+// just consider this as an aggregation of newtypes for implementing `Hash` and
+// a holder for various utility methods
+#[derive(Debug)]
 pub enum Hasher {
     Sha256(Sha256),
     Sha512(Sha512),
@@ -88,6 +91,11 @@ impl std::hash::Hasher for Hasher {
     }
 }
 
+// this is even more awkward than `Hasher`. because its implementation now fully
+// relies on deriving `Hash`, manual implementors cannot implement `DigestHash`
+// directly, or the deriving will fail if there's nested component that
+// implements `DigestHash` but not `Hash`
+// so it can only appear on consumer side for documentation purpose...
 pub trait DigestHash {
     fn hash(&self, hasher: &mut impl std::hash::Hasher);
 }
@@ -176,14 +184,14 @@ pub enum SigningKey {
     Ed25519(ed25519_dalek::SigningKey),
 }
 
-pub fn hardcoded_k256(index: ReplicaIndex) -> SigningKey {
+pub fn hardcoded_k256(index: usize) -> SigningKey {
     let k = format!("hardcoded-{index}");
     let mut buf = [0; 32];
     buf[..k.as_bytes().len()].copy_from_slice(k.as_bytes());
     SigningKey::K256(k256::ecdsa::SigningKey::from_slice(&buf).unwrap())
 }
 
-pub fn hardcoded_ed25519(index: ReplicaIndex) -> SigningKey {
+pub fn hardcoded_ed25519(index: usize) -> SigningKey {
     let k = format!("hardcoded-{index}");
     let mut buf = [0; 32];
     buf[..k.as_bytes().len()].copy_from_slice(k.as_bytes());
@@ -300,6 +308,7 @@ pub enum Verifier<I> {
 pub struct StandardVerifier<I> {
     verifying_keys: HashMap<I, VerifyingKey>,
     hmac: Hmac<Sha256>,
+    // is there any way to decouple crypto from ordered multicast?
     variant: Arc<Variant>,
 }
 

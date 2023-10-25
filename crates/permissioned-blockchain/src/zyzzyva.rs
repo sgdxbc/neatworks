@@ -9,10 +9,8 @@ use serde::{Deserialize, Serialize};
 use crate::{
     client::BoxedConsume,
     common::{Block, BlockDigest, Chain, Request, Timer},
-    context::{
-        crypto::{Sign, Signed, Verify},
-        Addr, MultiplexReceive,
-    },
+    context::{Addr, MultiplexReceive},
+    crypto::{Sign, Signed, Verify},
     App, ClientIndex, Context, ReplicaIndex, To,
 };
 
@@ -347,31 +345,31 @@ impl Replica {
 }
 
 impl Sign<Request> for Message {
-    fn sign(message: Request, signer: &crate::context::crypto::Signer) -> Self {
+    fn sign(message: Request, signer: &crate::crypto::Signer) -> Self {
         Self::Request(signer.sign_private(message))
     }
 }
 
 impl Sign<OrderRequest> for Message {
-    fn sign(message: OrderRequest, signer: &crate::context::crypto::Signer) -> Self {
+    fn sign(message: OrderRequest, signer: &crate::crypto::Signer) -> Self {
         Self::OrderRequest(signer.sign_public(message))
     }
 }
 
 impl Sign<SpecResponse> for Message {
-    fn sign(message: SpecResponse, signer: &crate::context::crypto::Signer) -> Self {
+    fn sign(message: SpecResponse, signer: &crate::crypto::Signer) -> Self {
         Self::SpecResponse(signer.sign_public(message))
     }
 }
 
 impl Sign<Commit> for Message {
-    fn sign(message: Commit, signer: &crate::context::crypto::Signer) -> Self {
+    fn sign(message: Commit, signer: &crate::crypto::Signer) -> Self {
         Self::Commit(signer.sign_private(message))
     }
 }
 
 impl Sign<LocalCommit> for Message {
-    fn sign(message: LocalCommit, signer: &crate::context::crypto::Signer) -> Self {
+    fn sign(message: LocalCommit, signer: &crate::crypto::Signer) -> Self {
         Self::LocalCommit(signer.sign_private(message))
     }
 }
@@ -379,8 +377,8 @@ impl Sign<LocalCommit> for Message {
 impl Verify<ReplicaIndex> for Message {
     fn verify(
         &self,
-        verifier: &crate::context::crypto::Verifier<ReplicaIndex>,
-    ) -> Result<(), crate::context::crypto::Invalid> {
+        verifier: &crate::crypto::Verifier<ReplicaIndex>,
+    ) -> Result<(), crate::crypto::Invalid> {
         match self {
             Self::Request(message) => verifier.verify(message, None),
             Self::OrderRequest(message) => verifier.verify(message, 0), // TODO

@@ -9,10 +9,8 @@ use serde::{Deserialize, Serialize};
 use crate::{
     client::BoxedConsume,
     common::{Block, BlockDigest, Chain, Request, Timer},
-    context::{
-        crypto::{Sign, Signature, Signed, Verify},
-        Addr, MultiplexReceive,
-    },
+    context::{Addr, MultiplexReceive},
+    crypto::{Sign, Signature, Signed, Verify},
     App, ClientIndex, Context, ReplicaIndex, To,
 };
 
@@ -301,13 +299,13 @@ impl Replica {
 }
 
 impl Sign<Request> for Message {
-    fn sign(message: Request, signer: &crate::context::crypto::Signer) -> Self {
+    fn sign(message: Request, signer: &crate::crypto::Signer) -> Self {
         Self::Request(signer.sign_private(message))
     }
 }
 
 impl Sign<Reply> for Message {
-    fn sign(message: Reply, signer: &crate::context::crypto::Signer) -> Self {
+    fn sign(message: Reply, signer: &crate::crypto::Signer) -> Self {
         Self::Reply(signer.sign_private(message))
     }
 }
@@ -318,7 +316,7 @@ fn simulate_sgx() {
 }
 
 impl Sign<Prepare> for Message {
-    fn sign(message: Prepare, _: &crate::context::crypto::Signer) -> Self {
+    fn sign(message: Prepare, _: &crate::crypto::Signer) -> Self {
         simulate_sgx();
         Self::Prepare(Signed {
             inner: message,
@@ -328,7 +326,7 @@ impl Sign<Prepare> for Message {
 }
 
 impl Sign<Commit> for Message {
-    fn sign(message: Commit, _: &crate::context::crypto::Signer) -> Self {
+    fn sign(message: Commit, _: &crate::crypto::Signer) -> Self {
         simulate_sgx();
         Self::Commit(Signed {
             inner: message,
@@ -340,8 +338,8 @@ impl Sign<Commit> for Message {
 impl Verify<ReplicaIndex> for Message {
     fn verify(
         &self,
-        verifier: &crate::context::crypto::Verifier<ReplicaIndex>,
-    ) -> Result<(), crate::context::crypto::Invalid> {
+        verifier: &crate::crypto::Verifier<ReplicaIndex>,
+    ) -> Result<(), crate::crypto::Invalid> {
         match self {
             Self::Request(message) => verifier.verify(message, None),
             Self::Reply(message) => verifier.verify(message, message.replica_index),

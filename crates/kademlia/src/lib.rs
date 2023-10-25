@@ -8,10 +8,8 @@ use std::{
 
 use derive_more::From;
 use neat::{
-    context::{
-        crypto::{Signed, VerifyingKey},
-        Addr, MultiplexReceive, TimerId, To,
-    },
+    context::{Addr, MultiplexReceive, TimerId, To},
+    crypto::{Signed, VerifyingKey},
     Context,
 };
 use primitive_types::U256;

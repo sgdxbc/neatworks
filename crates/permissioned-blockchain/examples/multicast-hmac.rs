@@ -1,8 +1,8 @@
 use std::net::UdpSocket;
 
-use permissioned_blockchain::context::{
+use permissioned_blockchain::{
+    context::ordered_multicast::{serialize, Variant},
     crypto::DigestHash,
-    ordered_multicast::{serialize, Variant},
 };
 use serde::{Deserialize, Serialize};
 
