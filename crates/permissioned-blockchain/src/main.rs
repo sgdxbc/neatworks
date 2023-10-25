@@ -17,7 +17,7 @@ use permissioned_blockchain::{
     context::{
         crypto::{Signer, Verifier},
         ordered_multicast::Variant,
-        tokio::Dispatch,
+        tokio::Multiplex,
         Addr,
     },
     hotstuff, minbft, neo, pbft, unreplicated, zyzzyva, App, Config,
@@ -115,9 +115,9 @@ async fn set_task(State(state): State<Arc<Mutex<AppState>>>, Json(task): Json<Ta
                         "neo-pk" | "neo-bn" => Variant::new_k256(),
                         _ => Variant::Unreachable,
                     });
-                    let mut dispatch = Dispatch::new(runtime.handle().clone(), variant.clone());
+                    let mut multiplex = Multiplex::new(runtime.handle().clone(), variant.clone());
 
-                    let handle = dispatch.handle();
+                    let handle = multiplex.handle();
                     std::thread::spawn(move || {
                         set_affinity(0);
                         runtime.block_on(async move {
@@ -146,25 +146,25 @@ async fn set_task(State(state): State<Arc<Mutex<AppState>>>, Json(task): Json<Ta
                         "unreplicated" => {
                             assert_eq!(replica.index, 0);
                             let mut replica = unreplicated::Replica::new(
-                                dispatch
+                                multiplex
                                     .register(addr, signer)
                                     .into_replication(replication_config),
                                 app,
                             );
                             // replica.make_blocks = true;
-                            dispatch.run(&mut replica, verifier)
+                            multiplex.run(&mut replica, verifier)
                         }
                         "neo-hm" | "neo-pk" | "neo-bn" => {
                             let mut replica = neo::Replica::new(
-                                dispatch
+                                multiplex
                                     .register(addr, signer)
                                     .into_replication(replication_config.clone()),
                                 replica.index,
                                 app,
                                 task.mode == "neo-bn",
                             );
-                            dispatch.drop_rate = task.drop_rate;
-                            dispatch
+                            multiplex.drop_rate = task.drop_rate;
+                            multiplex
                                 .enable_ordered_multicast(
                                     replication_config.multicast_addr.unwrap(),
                                 )
@@ -172,43 +172,43 @@ async fn set_task(State(state): State<Arc<Mutex<AppState>>>, Json(task): Json<Ta
                         }
                         "pbft" => {
                             let mut replica = pbft::Replica::new(
-                                dispatch
+                                multiplex
                                     .register(addr, signer)
                                     .into_replication(replication_config.clone()),
                                 replica.index,
                                 app,
                             );
-                            dispatch.run(&mut replica, verifier)
+                            multiplex.run(&mut replica, verifier)
                         }
                         "zyzzyva" | "zyzzyva-f" => {
                             let mut replica = zyzzyva::Replica::new(
-                                dispatch
+                                multiplex
                                     .register(addr, signer)
                                     .into_replication(replication_config.clone()),
                                 replica.index,
                                 app,
                             );
-                            dispatch.run(&mut replica, verifier)
+                            multiplex.run(&mut replica, verifier)
                         }
                         "hotstuff" => {
                             let mut replica = hotstuff::Replica::new(
-                                dispatch
+                                multiplex
                                     .register(addr, signer)
                                     .into_replication(replication_config.clone()),
                                 replica.index,
                                 app,
                             );
-                            dispatch.run(&mut replica, verifier)
+                            multiplex.run(&mut replica, verifier)
                         }
                         "minbft" => {
                             let mut replica = minbft::Replica::new(
-                                dispatch
+                                multiplex
                                     .register(addr, signer)
                                     .into_replication(replication_config.clone()),
                                 replica.index,
                                 app,
                             );
-                            dispatch.run(&mut replica, verifier)
+                            multiplex.run(&mut replica, verifier)
                         }
                         _ => unimplemented!(),
                     }

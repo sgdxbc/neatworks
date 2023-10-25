@@ -6,7 +6,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-use serde::de::DeserializeOwned;
+use serde::{de::DeserializeOwned, Serialize};
 use tokio_util::sync::CancellationToken;
 
 use crate::{
@@ -15,7 +15,7 @@ use crate::{
     context::{
         crypto::{Signer, Verifier, Verify},
         ordered_multicast::Variant,
-        tokio::{Dispatch, DispatchHandle},
+        tokio::{Multiplex, MultiplexHandle},
         Addr,
     },
     ClientIndex, ReplicaIndex,
@@ -143,13 +143,13 @@ impl<C> Benchmark<C> {
         }
     }
 
-    pub fn run_dispatch(&self) -> impl FnOnce(&mut crate::context::tokio::Dispatch) + Send
+    pub fn run_dispatch(&self) -> impl FnOnce(&mut crate::context::tokio::Multiplex) + Send
     where
         C: Client + Send + Sync + 'static,
         C::Message: DeserializeOwned + Verify<ReplicaIndex>,
     {
         struct R<C>(HashMap<Addr, Arc<C>>);
-        impl<C> crate::context::Receivers for R<C>
+        impl<C> crate::context::MultiplexReceive for R<C>
         where
             C: Client,
         {
@@ -189,13 +189,13 @@ pub fn run_benchmark<C>(
 ) -> Vec<Duration>
 where
     C: Client + Send + Sync + 'static,
-    C::Message: DeserializeOwned + Verify<ReplicaIndex>,
+    C::Message: Serialize + DeserializeOwned + Verify<ReplicaIndex>,
 {
     struct Group<C> {
         benchmark_thread: JoinHandle<Benchmark<C>>,
         runtime_thread: JoinHandle<()>,
         dispatch_thread: JoinHandle<()>,
-        dispatch_handle: DispatchHandle,
+        dispatch_handle: MultiplexHandle,
     }
 
     // println!("{config:?}");
@@ -211,14 +211,14 @@ where
                     .build()
                     .unwrap();
                 let handle = runtime.handle().clone();
-                let mut dispatch = Dispatch::new(handle.clone(), Variant::Unreachable);
+                let mut multiplex = Multiplex::new(handle.clone(), Variant::Unreachable);
 
                 let mut benchmark = Benchmark::new();
                 for group_offset in 0..config.num_client {
                     let index = config.offset + group_index * config.num_client + group_offset;
                     let addr = replication_config.client_addrs[index];
                     let client = new_client(
-                        dispatch
+                        multiplex
                             .register(addr, Signer::new_standard(None))
                             .into_replication(replication_config.clone()),
                         index as _,
@@ -233,11 +233,11 @@ where
                     move || runtime.block_on(cancel.cancelled())
                 });
 
-                let dispatch_handle = dispatch.handle();
+                let dispatch_handle = multiplex.handle();
                 let run = benchmark.run_dispatch();
                 let dispatch_thread = std::thread::spawn(move || {
                     set_affinity(group_index * 2 + 1);
-                    run(&mut dispatch);
+                    run(&mut multiplex);
                     cancel.cancel()
                 });
 

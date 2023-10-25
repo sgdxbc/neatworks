@@ -9,7 +9,7 @@ use serde::{Deserialize, Serialize};
 use super::{
     crypto::{Sign, Signer},
     replication::{ClientIndex, ReplicaIndex},
-    Receivers, To,
+    MultiplexReceive, To,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
@@ -130,7 +130,7 @@ impl<M> Dispatch<M> {
         })
     }
 
-    pub fn deliver_event(&self, receivers: &mut impl Receivers<Message = M>) -> bool {
+    pub fn deliver_event(&self, receivers: &mut impl MultiplexReceive<Message = M>) -> bool {
         let mut timeline = self.timeline.lock().unwrap();
         let Some(((now, id), event)) = timeline.events.pop_first() else {
             return false;

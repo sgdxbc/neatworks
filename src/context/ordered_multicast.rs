@@ -11,7 +11,7 @@ use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use super::{
     crypto::{DigestHash, Hasher, Invalid, Verifier, Verify},
     replication::ReplicaIndex,
-    Addr, Receivers,
+    Addr, MultiplexReceive,
 };
 
 pub fn serialize(message: &(impl Serialize + DigestHash)) -> Vec<u8> {
@@ -229,11 +229,11 @@ impl Variant {
 }
 
 impl<M> Delegate<M> {
-    pub fn on_receive<N, I>(
+    pub fn handle<N, I>(
         &mut self,
         remote: Addr,
         message: OrderedMulticast<M>,
-        receivers: &mut impl Receivers<Message = N>,
+        receivers: &mut impl MultiplexReceive<Message = N>,
         verifier: &Verifier<I>,
         into: impl Fn(OrderedMulticast<M>) -> N,
     ) where
@@ -284,7 +284,7 @@ impl<M> Delegate<M> {
 
     pub fn on_pace<N, I>(
         &mut self,
-        receivers: &mut impl Receivers<Message = N>,
+        receivers: &mut impl MultiplexReceive<Message = N>,
         verifier: &Verifier<I>,
         into: impl Fn(OrderedMulticast<M>) -> N,
     ) where

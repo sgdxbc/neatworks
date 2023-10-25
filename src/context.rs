@@ -38,10 +38,10 @@ impl<M> Context<M> {
 
     pub fn send<N>(&mut self, to: To, message: N)
     where
-        M: crypto::Sign<N> + Serialize + Clone,
+        M: crypto::Sign<N> + Clone,
     {
         match self {
-            Self::Tokio(context) => context.send::<M, _>(to, message),
+            Self::Tokio(context) => context.send(to, message),
             Self::Simulated(context) => context.send(to, message),
         }
     }
@@ -49,17 +49,6 @@ impl<M> Context<M> {
     pub fn send_buf(&self, addr: Addr, buf: impl AsRef<[u8]> + Send + Sync + 'static) {
         match self {
             Self::Tokio(context) => context.send_buf(addr, buf),
-            Self::Simulated(_) => todo!(),
-        }
-    }
-
-    pub fn subnode<N>(&self) -> Context<N>
-    where
-        N: Into<M>,
-        M: Serialize + 'static,
-    {
-        match self {
-            Self::Tokio(context) => Context::Tokio(context.subnode()),
             Self::Simulated(_) => todo!(),
         }
     }
@@ -88,7 +77,7 @@ impl<M> Context<M> {
     }
 }
 
-pub trait Receivers {
+pub trait MultiplexReceive {
     type Message;
 
     fn handle(&mut self, receiver: Addr, remote: Addr, message: Self::Message);
@@ -103,9 +92,9 @@ pub trait Receivers {
     fn on_pace(&mut self) {}
 }
 
-pub trait OrderedMulticastReceivers
+pub trait OrderedMulticastReceive
 where
-    Self: Receivers,
+    Self: MultiplexReceive,
 {
     type Message;
 }

@@ -3,16 +3,7 @@
 //! Although supported by an asynchronous reactor, protocol code, i.e.,
 //! `impl Receivers` is still synchronous and running in a separated thread.
 
-use std::{
-    borrow::Borrow,
-    collections::HashMap,
-    net::SocketAddr,
-    sync::{
-        atomic::{AtomicU32, Ordering::SeqCst},
-        Arc,
-    },
-    time::Duration,
-};
+use std::{borrow::Borrow, collections::HashMap, net::SocketAddr, sync::Arc, time::Duration};
 
 use bincode::Options;
 use rand::Rng;
@@ -25,7 +16,7 @@ use crate::context::crypto::Verifier;
 use super::{
     crypto::{DigestHash, Sign, Signer, Verify},
     ordered_multicast::{OrderedMulticast, Variant},
-    Addr, OrderedMulticastReceivers, Receivers, To,
+    Addr, MultiplexReceive, OrderedMulticastReceive, To,
 };
 
 #[derive(Debug, Clone)]
@@ -43,41 +34,23 @@ pub struct Context<M> {
     runtime: Handle,
     pub source: SocketAddr,
     signer: Arc<Signer>,
-    timer_id: Arc<AtomicU32>,
+    timer_id: TimerId,
     timer_tasks: HashMap<TimerId, JoinHandle<()>>,
     timer_lock: Arc<Mutex<Vec<Event>>>,
     event: flume::Sender<Event>,
     rdv_event: flume::Sender<Event>,
-    get_buf: Box<dyn GetBuf<M> + Send + Sync>,
+    get_buf: Box<dyn Fn(M) -> Vec<u8> + Send + Sync>,
 }
 
 trait GetBuf<M> {
     fn get_buf(&self, message: M) -> Vec<u8>
     where
         M: Serialize;
-
-    fn boxed_clone(&self) -> Box<dyn GetBuf<M> + Send + Sync>;
 }
 
-#[derive(Debug, Clone, Copy)]
-struct Bincode;
+struct Bincode<M, N>(std::marker::PhantomData<(M, N)>);
 
-impl<M> GetBuf<M> for Bincode {
-    fn get_buf(&self, message: M) -> Vec<u8>
-    where
-        M: Serialize,
-    {
-        bincode::options().serialize(&message).unwrap()
-    }
-
-    fn boxed_clone(&self) -> Box<dyn GetBuf<M> + Send + Sync> {
-        Box::new(Bincode)
-    }
-}
-
-struct Wrap<M>(Box<dyn GetBuf<M> + Send + Sync>);
-
-impl<M, N> GetBuf<N> for Wrap<M>
+impl<M, N> GetBuf<N> for Bincode<M, N>
 where
     N: Into<M>,
     M: Serialize + 'static,
@@ -86,29 +59,24 @@ where
     where
         N: Serialize,
     {
-        self.0.get_buf(message.into())
-    }
-
-    fn boxed_clone(&self) -> Box<dyn GetBuf<N> + Send + Sync> {
-        Box::new(Self(self.0.boxed_clone()))
+        bincode::options().serialize(&message.into()).unwrap()
     }
 }
 
 impl<M> std::fmt::Debug for Context<M> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "Context(..)")
+        write!(f, "{}(..)", std::any::type_name::<Self>())
     }
 }
 
 impl<M> Context<M> {
-    pub fn send<N, O>(&self, to: To, message: O)
+    pub fn send<N>(&self, to: To, message: N)
     where
-        N: Sign<O> + Into<M>,
-        M: Serialize,
+        M: Sign<N>,
     {
         // println!("{to:?}");
-        let message = N::sign(message, &self.signer).into();
-        let buf = Bytes::from(self.get_buf.get_buf(message));
+        let message = M::sign(message, &self.signer);
+        let buf = Bytes::from((self.get_buf)(message));
         // println!("{buf:02x?}");
         if matches!(
             to,
@@ -147,28 +115,9 @@ impl<M> Context<M> {
     pub fn idle_hint(&self) -> bool {
         self.event.is_empty()
     }
-
-    pub fn subnode<N>(&self) -> Context<N>
-    where
-        N: Into<M>,
-        M: Serialize + 'static,
-    {
-        Context {
-            source: self.source,
-            socket: self.socket.clone(),
-            runtime: self.runtime.clone(),
-            signer: self.signer.clone(),
-            timer_id: self.timer_id.clone(),
-            timer_tasks: Default::default(),
-            timer_lock: self.timer_lock.clone(),
-            event: self.event.clone(),
-            rdv_event: self.rdv_event.clone(),
-            get_buf: Box::new(Wrap(self.get_buf.boxed_clone())),
-        }
-    }
 }
 
-pub type TimerId = u32;
+pub type TimerId = (u32, u32); // (subnode id, local sequence number)
 
 // timer is designed to eliminate false alarm through rendezvous channel
 // however, current flume implementation of rendezvous channel is buggy and
@@ -180,7 +129,8 @@ pub type TimerId = u32;
 
 impl<M> Context<M> {
     pub fn set(&mut self, duration: Duration) -> TimerId {
-        let id = self.timer_id.fetch_add(1, SeqCst) + 1;
+        self.timer_id.1 += 1;
+        let id = self.timer_id;
         let event = self.rdv_event.clone();
         let source = self.source;
         let timer_lock = self.timer_lock.clone();
@@ -204,16 +154,17 @@ impl<M> Context<M> {
 }
 
 #[derive(Debug)]
-pub struct Dispatch {
+pub struct Multiplex {
     runtime: Handle,
     variant: Arc<Variant>,
     event: (flume::Sender<Event>, flume::Receiver<Event>),
     rdv_event: (flume::Sender<Event>, flume::Receiver<Event>),
     timer_lock: Arc<Mutex<Vec<Event>>>,
+    subnode_id: u32,
     pub drop_rate: f64,
 }
 
-impl Dispatch {
+impl Multiplex {
     pub fn new(runtime: Handle, variant: impl Into<Arc<Variant>>) -> Self {
         Self {
             runtime,
@@ -221,11 +172,15 @@ impl Dispatch {
             event: flume::unbounded(),
             rdv_event: flume::bounded(0),
             timer_lock: Default::default(),
+            subnode_id: Default::default(),
             drop_rate: 0.,
         }
     }
 
-    pub fn register<M>(&self, addr: Addr, signer: impl Into<Arc<Signer>>) -> super::Context<M> {
+    pub fn register<M>(&self, addr: Addr, signer: impl Into<Arc<Signer>>) -> super::Context<M>
+    where
+        M: Serialize,
+    {
         let Addr::Socket(addr) = addr else {
             unimplemented!()
         };
@@ -245,7 +200,7 @@ impl Dispatch {
             timer_lock: self.timer_lock.clone(),
             event: self.event.0.clone(),
             rdv_event: self.rdv_event.0.clone(),
-            get_buf: Box::new(Bincode),
+            get_buf: Box::new(|message| bincode::options().serialize(&message).unwrap()),
         };
         let event = self.event.0.clone();
         self.runtime.spawn(async move {
@@ -261,16 +216,39 @@ impl Dispatch {
         });
         super::Context::Tokio(context)
     }
+
+    pub fn register_subnode<M, N>(&mut self, context: &super::Context<M>) -> super::Context<N>
+    where
+        N: Into<M>,
+        M: Serialize,
+    {
+        let super::Context::Tokio(context) = context else {
+            unimplemented!()
+        };
+        self.subnode_id += 1;
+        super::Context::Tokio(Context {
+            socket: context.socket.clone(),
+            runtime: self.runtime.clone(),
+            source: context.source,
+            signer: context.signer.clone(),
+            timer_id: (self.subnode_id, Default::default()),
+            timer_tasks: Default::default(),
+            timer_lock: self.timer_lock.clone(),
+            event: self.event.0.clone(),
+            rdv_event: self.rdv_event.0.clone(),
+            get_buf: Box::new(|message| bincode::options().serialize(&message.into()).unwrap()),
+        })
+    }
 }
 
-impl Dispatch {
+impl Multiplex {
     fn run_internal<R, M, N, I>(
         &self,
-        receivers: &mut R,
-        into: impl Fn(OrderedMulticast<N>) -> M,
+        receive: &mut R,
+        from_ordered_multicast: impl Fn(OrderedMulticast<N>) -> M,
         verifier: &Verifier<I>,
     ) where
-        R: Receivers<Message = M>,
+        R: MultiplexReceive<Message = M>,
         M: DeserializeOwned + Verify<I>,
         N: DeserializeOwned + DigestHash,
     {
@@ -285,8 +263,8 @@ impl Dispatch {
         loop {
             if pace_count == 0 {
                 // println!("* pace");
-                delegate.on_pace(receivers, verifier, &into);
-                receivers.on_pace();
+                delegate.on_pace(receive, verifier, &from_ordered_multicast);
+                receive.on_pace();
                 pace_count = if self.event.0.is_empty() {
                     1
                 } else {
@@ -306,7 +284,7 @@ impl Dispatch {
                 let Event::Timer(receiver, id) = event else {
                     unreachable!()
                 };
-                receivers.on_timer(Socket(receiver), super::TimerId::Tokio(id))
+                receive.on_timer(Socket(receiver), super::TimerId::Tokio(id))
             }
 
             use crate::context::Addr::Socket;
@@ -319,23 +297,23 @@ impl Dispatch {
                     }
                     let message = deserialize(&message);
                     message.verify(verifier).unwrap();
-                    receivers.handle(Socket(receiver), Socket(remote), message)
+                    receive.handle(Socket(receiver), Socket(remote), message)
                 }
                 Event::LoopbackMessage(receiver, message) => {
                     pace_count -= 1;
-                    receivers.handle_loopback(Socket(receiver), deserialize(&message))
+                    receive.handle_loopback(Socket(receiver), deserialize(&message))
                 }
                 Event::OrderedMulticastMessage(remote, message) => {
                     pace_count -= 1;
                     if self.drop_rate != 0. && rand::thread_rng().gen_bool(self.drop_rate) {
                         continue;
                     }
-                    delegate.on_receive(
+                    delegate.handle(
                         Socket(remote),
                         self.variant.deserialize(message),
-                        receivers,
+                        receive,
                         verifier,
-                        &into,
+                        &from_ordered_multicast,
                     )
                 }
                 Event::TimerNotification => {} // handled above
@@ -346,7 +324,7 @@ impl Dispatch {
 
     pub fn run<M, I>(
         &self,
-        receivers: &mut impl Receivers<Message = M>,
+        receivers: &mut impl MultiplexReceive<Message = M>,
         verifier: impl Borrow<Verifier<I>>,
     ) where
         M: DeserializeOwned + Verify<I>,
@@ -363,18 +341,18 @@ impl Dispatch {
 }
 
 #[derive(Debug)]
-pub struct OrderedMulticastDispatch(Dispatch);
+pub struct OrderedMulticastMultiplex(Multiplex);
 
-impl std::ops::Deref for OrderedMulticastDispatch {
-    type Target = Dispatch;
+impl std::ops::Deref for OrderedMulticastMultiplex {
+    type Target = Multiplex;
 
     fn deref(&self) -> &Self::Target {
         &self.0
     }
 }
 
-impl Dispatch {
-    pub fn enable_ordered_multicast(self, addr: Addr) -> OrderedMulticastDispatch {
+impl Multiplex {
+    pub fn enable_ordered_multicast(self, addr: Addr) -> OrderedMulticastMultiplex {
         let Addr::Socket(addr) = addr else {
             unimplemented!()
         };
@@ -393,14 +371,14 @@ impl Dispatch {
                     .unwrap()
             }
         });
-        OrderedMulticastDispatch(self)
+        OrderedMulticastMultiplex(self)
     }
 }
 
-impl OrderedMulticastDispatch {
+impl OrderedMulticastMultiplex {
     pub fn run<M, N, I>(
         &self,
-        receivers: &mut (impl Receivers<Message = M> + OrderedMulticastReceivers<Message = N>),
+        receivers: &mut (impl MultiplexReceive<Message = M> + OrderedMulticastReceive<Message = N>),
         verifier: impl Borrow<Verifier<I>>,
     ) where
         M: DeserializeOwned + Verify<I>,
@@ -411,15 +389,15 @@ impl OrderedMulticastDispatch {
     }
 }
 
-pub struct DispatchHandle {
+pub struct MultiplexHandle {
     stop: Box<dyn Fn() + Send + Sync>,
     stop_async:
         Box<dyn Fn() -> std::pin::Pin<Box<dyn std::future::Future<Output = ()>>> + Send + Sync>,
 }
 
-impl Dispatch {
-    pub fn handle(&self) -> DispatchHandle {
-        DispatchHandle {
+impl Multiplex {
+    pub fn handle(&self) -> MultiplexHandle {
+        MultiplexHandle {
             stop: Box::new({
                 let rdv_event = self.rdv_event.0.clone();
                 move || rdv_event.send(Event::Stop).unwrap()
@@ -435,7 +413,7 @@ impl Dispatch {
     }
 }
 
-impl DispatchHandle {
+impl MultiplexHandle {
     pub fn stop(&self) {
         (self.stop)()
     }
@@ -459,7 +437,7 @@ mod tests {
             .unwrap();
         let _enter = runtime.enter();
         let addr = SocketAddr::from(([127, 0, 0, 1], 10000));
-        let dispatch = Dispatch::new(runtime.handle().clone(), Variant::Unreachable);
+        let multiplex = Multiplex::new(runtime.handle().clone(), Variant::Unreachable);
 
         #[derive(Serialize, Deserialize)]
         struct M;
@@ -469,11 +447,11 @@ mod tests {
             }
         }
 
-        let mut context = dispatch.register(Addr::Socket(addr), Signer::new_standard(None));
+        let mut context = multiplex.register(Addr::Socket(addr), Signer::new_standard(None));
         let id = context.set(Duration::from_millis(10));
 
-        let handle = dispatch.handle();
-        let event = dispatch.event.0.clone();
+        let handle = multiplex.handle();
+        let event = multiplex.event.0.clone();
         std::thread::spawn(move || {
             runtime.block_on(async move {
                 tokio::time::sleep(Duration::from_millis(9)).await;
@@ -492,7 +470,7 @@ mod tests {
         });
 
         struct R(bool, crate::context::Context<M>, crate::context::TimerId);
-        impl Receivers for R {
+        impl MultiplexReceive for R {
             type Message = M;
 
             fn handle(
@@ -518,7 +496,7 @@ mod tests {
             }
         }
 
-        dispatch.run(&mut R(false, context, id), Verifier::<()>::Nop);
+        multiplex.run(&mut R(false, context, id), Verifier::<()>::Nop);
     }
 
     #[test]

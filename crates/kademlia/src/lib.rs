@@ -10,7 +10,7 @@ use derive_more::From;
 use neat::{
     context::{
         crypto::{Signed, VerifyingKey},
-        Addr, Receivers, TimerId, To,
+        Addr, MultiplexReceive, TimerId, To,
     },
     Context,
 };
@@ -92,7 +92,7 @@ enum Contact {
     Timeout,
 }
 
-impl Receivers for State {
+impl MultiplexReceive for State {
     type Message = Message;
 
     fn handle(&mut self, receiver: Addr, remote: Addr, message: Self::Message) {

@@ -11,7 +11,7 @@ use crate::{
     common::{Block, BlockDigest, Chain, Request, Timer},
     context::{
         crypto::{Sign, Signed, Verify},
-        Addr, Receivers,
+        Addr, MultiplexReceive,
     },
     App, ClientIndex, Context, ReplicaIndex, To,
 };
@@ -218,7 +218,7 @@ impl Replica {
     }
 }
 
-impl Receivers for Replica {
+impl MultiplexReceive for Replica {
     type Message = Message;
 
     fn handle(&mut self, receiver: Addr, remote: Addr, message: Self::Message) {

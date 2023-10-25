@@ -17,7 +17,7 @@ use crate::{
             OrderedMulticast,
             Signature::{K256Unverified, K256},
         },
-        Addr, OrderedMulticastReceivers, Receivers,
+        Addr, OrderedMulticastReceive, MultiplexReceive,
     },
     App, ClientIndex, Context, ReplicaIndex, To,
 };
@@ -222,7 +222,7 @@ impl std::ops::Index<RangeInclusive<u32>> for I<'_> {
     }
 }
 
-impl Receivers for Replica {
+impl MultiplexReceive for Replica {
     type Message = Message;
 
     fn handle(&mut self, receiver: Addr, remote: Addr, message: Self::Message) {
@@ -267,7 +267,7 @@ impl Receivers for Replica {
     }
 }
 
-impl OrderedMulticastReceivers for Replica {
+impl OrderedMulticastReceive for Replica {
     type Message = Request;
 }
 

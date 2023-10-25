@@ -4,8 +4,8 @@ use neat::{
     context::{
         crypto::{Signer, Verifier, Verify},
         ordered_multicast::Variant,
-        tokio::Dispatch,
-        Addr, Receivers, To,
+        tokio::Multiplex,
+        Addr, MultiplexReceive, To,
     },
     Context,
 };
@@ -62,7 +62,7 @@ impl Node {
     }
 }
 
-impl Receivers for Node {
+impl MultiplexReceive for Node {
     type Message = Message;
 
     fn handle(&mut self, receiver: Addr, remote: Addr, message: Self::Message) {
@@ -84,7 +84,7 @@ impl Receivers for Node {
     }
 }
 
-impl Receivers for Subnode {
+impl MultiplexReceive for Subnode {
     type Message = SubnodeMessage;
 
     fn handle(&mut self, _: Addr, remote: Addr, message: Self::Message) {
@@ -109,20 +109,18 @@ impl Receivers for Subnode {
 }
 
 fn main() {
+    let addr = Addr::Socket(args().nth(1).unwrap().parse().unwrap());
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
         .unwrap();
     let runtime_handle = runtime.handle().clone();
     std::thread::spawn(move || runtime.block_on(pending::<()>()));
-    let dispatch = Dispatch::new(runtime_handle, Variant::Unreachable);
-    let context = dispatch.register::<Message>(
-        Addr::Socket(args().nth(1).unwrap().parse().unwrap()),
-        Signer::Simulated,
-    );
+    let mut multiplex = Multiplex::new(runtime_handle, Variant::Unreachable);
+    let context = multiplex.register::<Message>(addr, Signer::Simulated);
     let mut node = Node {
         subnode: Subnode {
-            context: context.subnode(),
+            context: multiplex.register_subnode(&context),
             client_addr: None,
         },
         context,
@@ -130,5 +128,5 @@ fn main() {
     if let Some("hello") = args().nth(2).as_deref() {
         node.hello(Addr::Socket(args().nth(3).unwrap().parse().unwrap()))
     }
-    dispatch.run(&mut node, Verifier::Nop)
+    multiplex.run(&mut node, Verifier::Nop)
 }
