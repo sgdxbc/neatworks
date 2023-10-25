@@ -1,7 +1,7 @@
 use std::{env::args, future::pending};
 
 use neat::{
-    context::{ordered_multicast::Variant, tokio::Multiplex, Addr, MultiplexReceive, To},
+    context::{ordered_multicast::Receiver, tokio::Multiplex, Addr, MultiplexReceive, To},
     crypto::{Signer, Verifier, Verify},
     Context,
 };
@@ -112,7 +112,7 @@ fn main() {
         .unwrap();
     let runtime_handle = runtime.handle().clone();
     std::thread::spawn(move || runtime.block_on(pending::<()>()));
-    let mut multiplex = Multiplex::new(runtime_handle, Variant::Unreachable);
+    let mut multiplex = Multiplex::new(runtime_handle, Receiver::Unreachable);
     let context = multiplex.register::<Message>(addr, Signer::Simulated);
     let mut node = Node {
         subnode: Subnode {

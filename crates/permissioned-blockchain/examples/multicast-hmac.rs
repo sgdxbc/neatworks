@@ -1,7 +1,7 @@
 use std::net::UdpSocket;
 
 use permissioned_blockchain::{
-    context::ordered_multicast::{serialize, Variant},
+    context::ordered_multicast::{serialize, Receiver},
     crypto::DigestHash,
 };
 use serde::{Deserialize, Serialize};
@@ -26,6 +26,6 @@ fn main() {
     let socket = UdpSocket::bind("10.0.0.255:60004").unwrap();
     let mut buf = vec![0; 1024];
     let (len, _) = socket.recv_from(&mut buf).unwrap();
-    let message = Variant::new_half_sip_hash(0).deserialize::<Message>(&buf[..len]);
+    let message = Receiver::new_half_sip_hash(0).deserialize::<Message>(&buf[..len]);
     println!("{message:?}");
 }

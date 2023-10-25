@@ -7,6 +7,8 @@ pub mod replication;
 pub mod simulated;
 pub mod tokio;
 
+pub use ordered_multicast::OrderedMulticast;
+
 #[derive(Debug)]
 pub enum Context<M> {
     Tokio(tokio::Context<M>),

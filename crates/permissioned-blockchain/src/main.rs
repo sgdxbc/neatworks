@@ -14,7 +14,7 @@ use permissioned_blockchain::{
     app::{ycsb, Workload},
     client::{run_benchmark, RunBenchmarkConfig},
     common::set_affinity,
-    context::{ordered_multicast::Variant, tokio::Multiplex, Addr},
+    context::{ordered_multicast::Receiver, tokio::Multiplex, Addr},
     crypto::{Signer, Verifier},
     hotstuff, minbft, neo, pbft, unreplicated, zyzzyva, App, Config,
 };
@@ -107,9 +107,9 @@ async fn set_task(State(state): State<Arc<Mutex<AppState>>>, Json(task): Json<Ta
                         .build()
                         .unwrap();
                     let variant = Arc::new(match &*task.mode {
-                        "neo-hm" => Variant::new_half_sip_hash(replica.index),
-                        "neo-pk" | "neo-bn" => Variant::new_k256(),
-                        _ => Variant::Unreachable,
+                        "neo-hm" => Receiver::new_half_sip_hash(replica.index),
+                        "neo-pk" | "neo-bn" => Receiver::new_k256(),
+                        _ => Receiver::Unreachable,
                     });
                     let mut multiplex = Multiplex::new(runtime.handle().clone(), variant.clone());
 

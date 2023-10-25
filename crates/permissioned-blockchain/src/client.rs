@@ -13,7 +13,7 @@ use crate::{
     app::Workload,
     common::set_affinity,
     context::{
-        ordered_multicast::Variant,
+        ordered_multicast::Receiver,
         tokio::{Multiplex, MultiplexHandle},
         Addr,
     },
@@ -211,7 +211,7 @@ where
                     .build()
                     .unwrap();
                 let handle = runtime.handle().clone();
-                let mut multiplex = Multiplex::new(handle.clone(), Variant::Unreachable);
+                let mut multiplex = Multiplex::new(handle.clone(), Receiver::Unreachable);
 
                 let mut benchmark = Benchmark::new();
                 for group_offset in 0..config.num_client {

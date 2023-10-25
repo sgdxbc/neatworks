@@ -101,7 +101,7 @@ fn state_internal(linked: [u8; 32], digest: [u8; 32], seq_num: u32) -> Sha256 {
 }
 
 #[derive(Debug, Clone)]
-pub enum Variant {
+pub enum Receiver {
     Unreachable,
     HalfSipHash(HalfSipHash),
     K256(K256),
@@ -120,7 +120,7 @@ pub struct K256 {
 
 const SIGNING_KEY: &[u8] = include_bytes!("ordered_multicast_signing_key");
 
-impl Variant {
+impl Receiver {
     pub fn new_half_sip_hash(index: ReplicaIndex) -> Self {
         Self::HalfSipHash(HalfSipHash { index })
     }
@@ -210,23 +210,27 @@ impl Variant {
     }
 }
 
+// a quick patch on `Receiver`, when i realize k256 batching verification
+// requires some mutable states
+// consider a more clear way to integrate with context if works on ordered
+// multicast again
 #[derive(Debug)]
-pub enum Delegate<M> {
+pub enum ReceiverDelegate<M> {
     Nop(ReplicaIndex),
     K256(Option<(Addr, OrderedMulticast<M>)>),
 }
 
-impl Variant {
-    pub fn delegate<M>(&self) -> Delegate<M> {
+impl Receiver {
+    pub fn delegate<M>(&self) -> ReceiverDelegate<M> {
         match self {
-            Self::Unreachable => Delegate::Nop(ReplicaIndex::MAX),
-            Self::HalfSipHash(variant) => Delegate::Nop(variant.index),
-            Self::K256(_) => Delegate::K256(Default::default()),
+            Self::Unreachable => ReceiverDelegate::Nop(ReplicaIndex::MAX),
+            Self::HalfSipHash(variant) => ReceiverDelegate::Nop(variant.index),
+            Self::K256(_) => ReceiverDelegate::K256(Default::default()),
         }
     }
 }
 
-impl<M> Delegate<M> {
+impl<M> ReceiverDelegate<M> {
     pub fn handle<N, I>(
         &mut self,
         remote: Addr,

@@ -14,7 +14,7 @@ use tokio_util::bytes::Bytes;
 use crate::crypto::{DigestHash, Sign, Signer, Verifier, Verify};
 
 use super::{
-    ordered_multicast::{OrderedMulticast, Variant},
+    ordered_multicast::{self, OrderedMulticast},
     Addr, MultiplexReceive, OrderedMulticastReceive, To,
 };
 
@@ -155,7 +155,7 @@ impl<M> Context<M> {
 #[derive(Debug)]
 pub struct Multiplex {
     runtime: Handle,
-    variant: Arc<Variant>,
+    ordered_multicast_receiver: Arc<ordered_multicast::Receiver>,
     event: (flume::Sender<Event>, flume::Receiver<Event>),
     rdv_event: (flume::Sender<Event>, flume::Receiver<Event>),
     timer_lock: Arc<Mutex<Vec<Event>>>,
@@ -164,10 +164,13 @@ pub struct Multiplex {
 }
 
 impl Multiplex {
-    pub fn new(runtime: Handle, variant: impl Into<Arc<Variant>>) -> Self {
+    pub fn new(
+        runtime: Handle,
+        ordered_multicast_receiver: impl Into<Arc<ordered_multicast::Receiver>>,
+    ) -> Self {
         Self {
             runtime,
-            variant: variant.into(),
+            ordered_multicast_receiver: ordered_multicast_receiver.into(),
             event: flume::unbounded(),
             rdv_event: flume::bounded(0),
             timer_lock: Default::default(),
@@ -257,7 +260,7 @@ impl Multiplex {
                 .deserialize::<M>(buf)
                 .unwrap()
         };
-        let mut delegate = self.variant.delegate();
+        let mut delegate = self.ordered_multicast_receiver.delegate();
         let mut pace_count = 1;
         loop {
             if pace_count == 0 {
@@ -309,7 +312,7 @@ impl Multiplex {
                     }
                     delegate.handle(
                         Socket(remote),
-                        self.variant.deserialize(message),
+                        self.ordered_multicast_receiver.deserialize(message),
                         receive,
                         verifier,
                         &from_ordered_multicast,
@@ -323,7 +326,7 @@ impl Multiplex {
 
     pub fn run<M, I>(
         &self,
-        receivers: &mut impl MultiplexReceive<Message = M>,
+        receive: &mut impl MultiplexReceive<Message = M>,
         verifier: impl Borrow<Verifier<I>>,
     ) where
         M: DeserializeOwned + Verify<I>,
@@ -335,7 +338,7 @@ impl Multiplex {
                 unreachable!()
             }
         }
-        self.run_internal::<_, _, O, _>(receivers, |_| unimplemented!(), verifier.borrow())
+        self.run_internal::<_, _, O, _>(receive, |_| unimplemented!(), verifier.borrow())
     }
 }
 
@@ -436,7 +439,10 @@ mod tests {
             .unwrap();
         let _enter = runtime.enter();
         let addr = SocketAddr::from(([127, 0, 0, 1], 10000));
-        let multiplex = Multiplex::new(runtime.handle().clone(), Variant::Unreachable);
+        let multiplex = Multiplex::new(
+            runtime.handle().clone(),
+            ordered_multicast::Receiver::Unreachable,
+        );
 
         #[derive(Serialize, Deserialize)]
         struct M;

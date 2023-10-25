@@ -8,7 +8,7 @@ use k256::{
 };
 use serde::{Deserialize, Serialize};
 
-use crate::context::ordered_multicast::{OrderedMulticast, Variant};
+use crate::context::ordered_multicast::{OrderedMulticast, Receiver};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Signed<M> {
@@ -309,7 +309,7 @@ pub struct StandardVerifier<I> {
     verifying_keys: HashMap<I, VerifyingKey>,
     hmac: Hmac<Sha256>,
     // is there any way to decouple crypto from ordered multicast?
-    variant: Arc<Variant>,
+    variant: Arc<Receiver>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -352,7 +352,7 @@ impl std::fmt::Display for Invalid {
 impl std::error::Error for Invalid {}
 
 impl<I> Verifier<I> {
-    pub fn new_standard(variant: impl Into<Arc<Variant>>) -> Self {
+    pub fn new_standard(variant: impl Into<Arc<Receiver>>) -> Self {
         Self::Standard(Box::new(StandardVerifier {
             verifying_keys: Default::default(),
             hmac: hardcoded_hmac(),

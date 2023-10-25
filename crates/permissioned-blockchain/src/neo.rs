@@ -12,11 +12,8 @@ use crate::{
     client::BoxedConsume,
     common::{Request, Timer},
     context::{
-        ordered_multicast::{
-            OrderedMulticast,
-            Signature::{K256Unverified, K256},
-        },
-        Addr, MultiplexReceive, OrderedMulticastReceive,
+        ordered_multicast::Signature::{K256Unverified, K256},
+        Addr, MultiplexReceive, OrderedMulticast, OrderedMulticastReceive,
     },
     crypto::{Hasher, Sign, Signed, Verify},
     App, ClientIndex, Context, ReplicaIndex, To,
