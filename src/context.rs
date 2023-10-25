@@ -87,7 +87,7 @@ pub trait MultiplexReceive {
 
     #[allow(unused_variables)]
     fn handle_loopback(&mut self, receiver: Addr, message: Self::Message) {
-        unreachable!()
+        unimplemented!()
     }
 
     fn on_timer(&mut self, receiver: Addr, id: TimerId);

@@ -3,46 +3,48 @@ pub mod store;
 use std::{
     collections::{BTreeMap, HashMap},
     mem::replace,
-    time::Duration,
+    time::{Duration, SystemTime},
 };
 
 use derive_more::From;
 use neat::{
     context::{Addr, MultiplexReceive, TimerId, To},
-    crypto::{Signed, VerifyingKey},
+    crypto::{Sign, Signed, VerifyingKey},
     Context,
 };
 use primitive_types::U256;
 use serde::{Deserialize, Serialize};
 
-use crate::store::{distance, PeerRecord, Store};
+use crate::store::{distance, Store};
 
 pub type PeerId = [u8; 32];
 
+#[allow(clippy::large_enum_variant)]
 #[derive(Debug, Clone, PartialEq, Eq, Hash, From, Serialize, Deserialize)]
 pub enum Message {
     // p2p messages
-    Find(Find),
-    FindOk(FindOk),
+    Find(Signed<PeerRecord>),
+    FindOk(Signed<FindOk>),
     // rpc messages
     Query(Query),
     CancelQuery(CancelQuery),
     QueryStatus(QueryStatus),
-    // internal
-    LocalRecord(Box<Signed<PeerRecord>>),
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
-pub struct Find {
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash)]
+pub struct PeerRecord {
+    id: PeerId,
+    verifying_key: VerifyingKey,
+    addr: Addr,
+    last_active: SystemTime,
     target: PeerId,
-    local_record: Box<Signed<PeerRecord>>, // to avoid large difference of variant sizes
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct FindOk {
+    peer_id: PeerId,
     target: PeerId,
     peer_records: Vec<Signed<PeerRecord>>,
-    local_record: Box<Signed<PeerRecord>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -72,7 +74,6 @@ pub struct State {
 
     store: Store,
     queries: HashMap<PeerId, QueryState>,
-    local_record: Signed<PeerRecord>,
 }
 
 #[derive(Debug)]
@@ -101,7 +102,6 @@ impl MultiplexReceive for State {
             Message::QueryStatus(_) => unimplemented!(),
             Message::Find(message) => self.handle_find(remote, message),
             Message::FindOk(message) => self.handle_find_ok(remote, message),
-            Message::LocalRecord(_) => unimplemented!(),
         }
     }
 
@@ -115,14 +115,6 @@ impl MultiplexReceive for State {
                     return;
                 }
             }
-        }
-    }
-
-    fn handle_loopback(&mut self, receiver: Addr, message: Self::Message) {
-        assert_eq!(receiver, self.context.addr());
-        match message {
-            Message::LocalRecord(record) => self.local_record = *record,
-            _ => unimplemented!(),
         }
     }
 }
@@ -164,9 +156,12 @@ impl State {
         let query = self.queries.get_mut(target).unwrap();
         for (record, contact) in query.peers.values_mut() {
             if matches!(contact, Contact::Pending) {
-                let find = Find {
+                let find = PeerRecord {
                     target: *target,
-                    local_record: Box::new(self.local_record.clone()),
+                    id: self.id,
+                    verifying_key: self.verifying_key,
+                    addr: self.context.addr(),
+                    last_active: SystemTime::now(),
                 };
                 self.context.send(To::Addr(record.addr), find);
                 *contact = Contact::Sent(self.context.set(Duration::from_millis(500)));
@@ -176,27 +171,22 @@ impl State {
         unimplemented!()
     }
 
-    fn handle_find(&mut self, remote: Addr, message: Find) {
-        assert_eq!(remote, message.local_record.addr);
-        self.store.insert(*message.local_record);
-        let mut peer_records = self.store.closest(&message.target, self.store.bucket_size);
-        if let Some(index) = peer_records.iter().position(|record| {
-            distance(&record.id, &message.target) > distance(&self.local_record.id, &message.target)
-        }) {
-            peer_records.insert(index, self.local_record.clone())
-        }
+    fn handle_find(&mut self, remote: Addr, message: Signed<PeerRecord>) {
+        self.store.insert(message.clone());
+        let peer_records = self.store.closest(&message.target, self.store.bucket_size);
         let find_ok = FindOk {
             target: message.target,
+            peer_id: self.id,
             peer_records,
-            local_record: Box::new(self.local_record.clone()),
         };
         self.context.send(To::Addr(remote), find_ok)
     }
 
-    fn handle_find_ok(&mut self, _remote: Addr, message: FindOk) {
+    fn handle_find_ok(&mut self, _remote: Addr, message: Signed<FindOk>) {
         let Some(query) = self.queries.get_mut(&message.target) else {
             return;
         };
+        let message = message.inner;
         for record in message.peer_records {
             self.store.insert(record.clone());
             let distance = distance(&record.id, &message.target);
@@ -209,9 +199,9 @@ impl State {
 
         let (record, contact) = query
             .peers
-            .get_mut(&distance(&message.local_record.id, &message.target))
+            .get_mut(&distance(&message.peer_id, &message.target))
             .unwrap();
-        assert_eq!(record.id, message.local_record.id);
+        assert_eq!(record.id, message.peer_id);
         if let Contact::Sent(timer_id) = replace(contact, Contact::Replied) {
             self.context.unset(timer_id)
         }
@@ -242,5 +232,17 @@ impl State {
         } else {
             self.queries.remove(&message.target).unwrap();
         }
+    }
+}
+
+impl Sign<PeerRecord> for Message {
+    fn sign(message: PeerRecord, signer: &neat::crypto::Signer) -> Self {
+        Message::Find(signer.sign_public_for_batch(message))
+    }
+}
+
+impl Sign<FindOk> for Message {
+    fn sign(message: FindOk, signer: &neat::crypto::Signer) -> Self {
+        Message::FindOk(signer.sign_public(message))
     }
 }

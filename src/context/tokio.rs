@@ -21,7 +21,7 @@ use super::{
 #[derive(Debug, Clone)]
 enum Event {
     Message(SocketAddr, SocketAddr, Vec<u8>),
-    LoopbackMessage(SocketAddr, Bytes),
+    LocalMessage(SocketAddr, Bytes),
     OrderedMulticastMessage(SocketAddr, Vec<u8>),
     Timer(SocketAddr, TimerId),
     TimerNotification,
@@ -83,7 +83,7 @@ impl<M> Context<M> {
             To::Loopback | To::AddrsWithLoopback(_) | To::Addr(Addr::Upcall)
         ) {
             self.event
-                .send(Event::LoopbackMessage(self.source, buf.clone()))
+                .send(Event::LocalMessage(self.source, buf.clone()))
                 .unwrap()
         }
         match to {
@@ -301,7 +301,7 @@ impl Multiplex {
                     message.verify(verifier).unwrap();
                     receive.handle(Socket(receiver), Socket(remote), message)
                 }
-                Event::LoopbackMessage(receiver, message) => {
+                Event::LocalMessage(receiver, message) => {
                     pace_count -= 1;
                     receive.handle_loopback(Socket(receiver), deserialize(&message))
                 }

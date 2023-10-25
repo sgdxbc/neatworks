@@ -1,13 +1,9 @@
-use std::time::{Duration, SystemTime};
+use std::time::Duration;
 
-use neat::{
-    context::Addr,
-    crypto::{Signed, VerifyingKey},
-};
+use neat::crypto::Signed;
 use primitive_types::U256;
-use serde::{Deserialize, Serialize};
 
-use crate::PeerId;
+use crate::{PeerId, PeerRecord};
 
 pub fn distance(peer_id: &PeerId, target: &PeerId) -> U256 {
     U256::from_big_endian(peer_id) ^ U256::from_big_endian(target)
@@ -27,14 +23,6 @@ struct KBucket {
     id: U256,
     id_mask: U256,
     records: Vec<Signed<PeerRecord>>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash)]
-pub struct PeerRecord {
-    pub id: PeerId,
-    pub verifying_key: VerifyingKey,
-    pub addr: Addr,
-    pub last_active: SystemTime,
 }
 
 impl Store {
