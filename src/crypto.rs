@@ -79,7 +79,7 @@ impl Signer {
         Ok(Verified {
             signature,
             inner: message,
-            serialized_inner: serialized_inner,
+            serialized_inner,
         })
     }
 }
@@ -103,7 +103,7 @@ impl Verifier {
         SECP.with(|secp| {
             secp.verify_ecdsa(
                 &hash,
-                &secp256k1::ecdsa::Signature::from_compact(&*signature)?,
+                &secp256k1::ecdsa::Signature::from_compact(signature)?,
                 &self.0,
             )
         })?;

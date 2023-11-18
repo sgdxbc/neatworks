@@ -1,43 +1,10 @@
-use std::{future::Future, sync::Arc};
+use std::sync::Arc;
 
 use borsh::{BorshDeserialize, BorshSerialize};
 use derive_more::From;
-use tokio::sync::mpsc::{self, UnboundedReceiver, UnboundedSender};
-use tokio_util::sync::CancellationToken;
+use tokio::sync::mpsc::{self, UnboundedSender};
 
-use crate::model::{EventSource, Transport};
-
-#[derive(Debug, Clone)]
-pub struct BackgroundSpawner {
-    err_sender: UnboundedSender<crate::Error>,
-    token: CancellationToken,
-}
-
-impl BackgroundSpawner {
-    pub fn spawn(&self, task: impl Future<Output = crate::Result<()>> + Send + 'static) {
-        let Self { err_sender, token } = self.clone();
-        tokio::spawn(async move {
-            let result = tokio::select! {
-                result = task => result,
-                _ = token.cancelled() => return,
-            };
-            if let Err(err) = result {
-                err_sender
-                    .send(err)
-                    .expect("background monitor not shutdown")
-            }
-        });
-    }
-}
-
-#[derive(Debug)]
-pub struct BackgroundMonitor(UnboundedReceiver<crate::Error>);
-
-impl BackgroundMonitor {
-    pub async fn wait(&mut self) -> crate::Result<()> {
-        self.0.recv().await.map(Err).unwrap_or(Ok(()))
-    }
-}
+use crate::model::{EventSource, Message, Transport};
 
 #[derive(Debug, Clone, From)]
 pub struct UdpSocket(Arc<tokio::net::UdpSocket>);
@@ -82,7 +49,14 @@ where
     M: Into<N> + Send + 'static,
     N: BorshSerialize + Send + Sync,
 {
-    async fn send_to(&mut self, destination: crate::Addr, message: M) -> crate::Result<()> {
+    fn addr(&self) -> crate::Addr {
+        crate::Addr::Socket(self.0.local_addr().expect("retrievable local address"))
+    }
+
+    async fn send_to(&mut self, destination: crate::Addr, message: M) -> crate::Result<()>
+    where
+        M: Message,
+    {
         let crate::Addr::Socket(destination) = destination else {
             crate::bail!("unsupported destination kind {destination:?}")
         };
