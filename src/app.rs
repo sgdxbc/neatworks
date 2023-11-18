@@ -1,30 +1,18 @@
-use tokio::sync::{mpsc, oneshot};
-
-#[async_trait::async_trait]
-pub trait App
-where
-    Self: Send + 'static,
-{
-    async fn execute(&mut self, op: &[u8]) -> Vec<u8>;
-}
+use crate::submit::Receiver;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 pub struct Null;
 
-#[async_trait::async_trait]
-impl App for Null {
-    async fn execute(&mut self, _: &[u8]) -> Vec<u8> {
-        Default::default()
-    }
-}
-
-#[derive(Debug, Clone)]
-pub struct AppHandle<T, U>(pub mpsc::UnboundedSender<(T, oneshot::Sender<U>)>);
-
-impl<T, U> AppHandle<T, U> {
-    pub async fn invoke(&self, op: T) -> crate::Result<U> {
-        let chan = oneshot::channel();
-        self.0.send((op, chan.0)).map_err(|_| "send fail")?;
-        Ok(chan.1.await?)
+impl Null {
+    pub async fn submit_loop<T, U>(self, mut receiver: Receiver<T, U>) -> crate::Result<()>
+    where
+        U: Default,
+    {
+        while let Some((_, reply)) = receiver.recv().await {
+            reply
+                .send(Default::default())
+                .map_err(|_| crate::err!("unexpected reply channel closing"))?
+        }
+        Ok(())
     }
 }

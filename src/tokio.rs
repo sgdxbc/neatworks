@@ -1,6 +1,7 @@
 use std::{future::Future, sync::Arc};
 
 use borsh::{BorshDeserialize, BorshSerialize};
+use derive_more::From;
 use tokio::sync::mpsc::{self, UnboundedReceiver, UnboundedSender};
 use tokio_util::sync::CancellationToken;
 
@@ -38,26 +39,21 @@ impl BackgroundMonitor {
     }
 }
 
-#[derive(Debug, Clone, derive_more::From)]
+#[derive(Debug, Clone, From)]
 pub struct UdpSocket(Arc<tokio::net::UdpSocket>);
 
 impl UdpSocket {
-    pub fn spawn_listen<M, E>(self, spawner: &BackgroundSpawner) -> impl EventSource<E>
+    pub async fn listen_loop<M, E>(&self, event_sender: UnboundedSender<E>) -> crate::Result<()>
     where
         M: BorshDeserialize + Into<E> + Send + 'static,
     {
-        let chan = mpsc::unbounded_channel::<M>();
-        let Self(socket) = self;
-        spawner.spawn(async move {
-            let mut buf = vec![0; 65536];
-            loop {
-                let (len, _remote) = socket.recv_from(&mut buf).await?;
-                chan.0
-                    .send(borsh::from_slice(&buf[..len])?)
-                    .map_err(|_| crate::err!("unexpected closing"))?
-            }
-        });
-        chan.1
+        let mut buf = vec![0; 65536];
+        loop {
+            let (len, _remote) = self.0.recv_from(&mut buf).await?;
+            event_sender
+                .send(borsh::from_slice::<M>(&buf[..len])?.into())
+                .map_err(|_| crate::err!("unexpected event channel closing"))?
+        }
     }
 }
 
