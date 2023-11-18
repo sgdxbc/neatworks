@@ -2,9 +2,9 @@ use std::sync::Arc;
 
 use borsh::{BorshDeserialize, BorshSerialize};
 use derive_more::From;
-use tokio::sync::mpsc::{self, UnboundedSender};
+use tokio::sync::mpsc::UnboundedSender;
 
-use crate::model::{EventSource, Message, Transport};
+use crate::model::{Message, Transport};
 
 #[derive(Debug, Clone, From)]
 pub struct UdpSocket(Arc<tokio::net::UdpSocket>);
@@ -24,17 +24,7 @@ impl UdpSocket {
     }
 }
 
-#[async_trait::async_trait]
-impl<M, E> EventSource<E> for mpsc::UnboundedReceiver<M>
-where
-    M: Into<E> + Send,
-{
-    async fn next(&mut self) -> Option<E> {
-        self.recv().await.map(Into::into)
-    }
-}
-
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct UdpTransport<M>(Arc<tokio::net::UdpSocket>, std::marker::PhantomData<M>);
 
 impl<M> From<UdpSocket> for UdpTransport<M> {
@@ -43,17 +33,23 @@ impl<M> From<UdpSocket> for UdpTransport<M> {
     }
 }
 
+impl<M> Clone for UdpTransport<M> {
+    fn clone(&self) -> Self {
+        Self(self.0.clone(), Default::default())
+    }
+}
+
 #[async_trait::async_trait]
 impl<M, N> Transport<M> for UdpTransport<N>
 where
     M: Into<N> + Send + 'static,
-    N: BorshSerialize + Send + Sync,
+    N: BorshSerialize + Send + Sync + 'static,
 {
     fn addr(&self) -> crate::Addr {
         crate::Addr::Socket(self.0.local_addr().expect("retrievable local address"))
     }
 
-    async fn send_to(&mut self, destination: crate::Addr, message: M) -> crate::Result<()>
+    async fn send_to(&self, destination: crate::Addr, message: M) -> crate::Result<()>
     where
         M: Message,
     {

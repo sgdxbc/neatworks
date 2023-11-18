@@ -6,6 +6,7 @@ pub mod net;
 pub mod replication;
 pub mod submit;
 pub mod task;
+pub mod unreplicated;
 
 pub use anyhow::{anyhow as err, bail, Error, Result};
 

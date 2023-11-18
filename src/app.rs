@@ -8,8 +8,8 @@ impl Null {
     where
         U: Default,
     {
-        while let Some((_, reply)) = receiver.recv().await {
-            reply
+        while let Some((_, result)) = receiver.option_next().await {
+            result
                 .send(Default::default())
                 .map_err(|_| crate::err!("unexpected reply channel closing"))?
         }

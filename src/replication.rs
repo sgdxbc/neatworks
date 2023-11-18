@@ -1,6 +1,7 @@
 use std::{
     collections::{BTreeMap, HashMap},
     net::SocketAddr,
+    time::Duration,
 };
 
 use borsh::{BorshDeserialize, BorshSerialize};
@@ -120,4 +121,5 @@ pub struct Client {
     pub num_faulty: usize,
     pub spawner: BackgroundSpawner,
     pub addr_book: AddrBook,
+    pub retry_interval: Duration,
 }
