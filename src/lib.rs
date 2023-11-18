@@ -1,5 +1,6 @@
 pub mod addr;
 pub mod app;
+pub mod crypto;
 pub mod model;
 pub mod submit;
 pub mod tokio;

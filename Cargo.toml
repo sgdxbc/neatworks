@@ -10,6 +10,6 @@ anyhow = { version = "1.0.75", features = ["backtrace"] }
 async-trait = "0.1.74"
 borsh = { version = "1.2.0", features = ["derive"] }
 derive_more = "0.99.17"
-secp256k1 = { version = "0.28.0", features = ["serde"] }
+secp256k1 = { version = "0.28.0", features = ["hashes"] }
 tokio = { version = "1.33.0", features = ["full"] }
 tokio-util = "0.7.10"
