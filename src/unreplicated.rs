@@ -1,9 +1,15 @@
-use std::{collections::HashMap, error::Error, pin::pin};
+use std::collections::HashMap;
 
-use futures_util::{Sink, SinkExt, Stream, StreamExt};
+use futures_util::{SinkExt, StreamExt};
 use serde::{Deserialize, Serialize};
 
-use crate::App;
+use crate::{
+    transport::{
+        Source,
+        Transmit::{ToClient, ToReplica},
+    },
+    App, Transport,
+};
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct Request {
@@ -28,23 +34,23 @@ impl Client {
     pub async fn invoke(
         &mut self,
         op: Vec<u8>,
-        tx: impl Sink<Request>,
-        rx: impl Stream<Item = Reply>,
-    ) -> Result<Vec<u8>, Box<dyn Error + Send + Sync>> {
-        let mut tx = pin!(tx);
+        mut transport: impl Transport<Request>,
+        mut reply_source: impl Source<Reply>,
+    ) -> crate::Result<Vec<u8>> {
         self.request_num += 1;
         let request = Request {
             client_id: self.id,
             request_num: self.request_num,
             op,
         };
-        tx.send(request).await.map_err(|_| "tx failure")?;
-
-        let mut rx = pin!(rx);
+        transport
+            .send(ToReplica(0, request))
+            .await
+            .map_err(|_| "tranport Request fail")?;
         loop {
-            let reply = rx.next().await.ok_or("rx failure")?;
+            let reply = reply_source.next().await.ok_or("Reply source fail")?;
             if reply.request_num == self.request_num {
-                return Ok(reply.result);
+                break Ok(reply.result);
             }
         }
     }
@@ -52,27 +58,31 @@ impl Client {
 
 pub async fn replica_loop(
     mut app: impl App,
-    tx: impl Sink<Reply>,
-    rx: impl Stream<Item = Request>,
-) -> Result<(), Box<dyn Error + Send + Sync>> {
-    let mut tx = pin!(tx);
-    let mut rx = pin!(rx);
+    mut transport: impl Transport<Reply>,
+    mut request_source: impl Source<Request>,
+) -> crate::Result<()> {
     let mut replies = HashMap::<_, Reply>::new();
     loop {
-        let request = rx.next().await.ok_or("rx failure")?;
+        let request = request_source.next().await.ok_or("Request source fail")?;
         match replies.get(&request.client_id) {
             Some(reply) if reply.request_num > request.request_num => continue,
             Some(reply) if reply.request_num == request.request_num => {
-                tx.send(reply.clone()).await.map_err(|_| "tx failure")?;
+                transport
+                    .send(ToClient(request.client_id, reply.clone()))
+                    .await
+                    .map_err(|_| "transport Reply fail")?;
                 continue;
             }
             _ => {}
         }
         let reply = Reply {
             request_num: request.request_num,
-            result: app.execute(&request.op),
+            result: app.execute(&request.op).await,
         };
         replies.insert(request.client_id, reply.clone());
-        tx.send(reply).await.map_err(|_| "tx failure")?
+        transport
+            .send(ToClient(request.client_id, reply))
+            .await
+            .map_err(|_| "transport Reply fail")?
     }
 }
