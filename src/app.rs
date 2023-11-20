@@ -10,7 +10,7 @@ impl Null {
     {
         while let Some((_, result)) = receiver.option_next().await {
             result
-                .send(Default::default())
+                .resolve(Default::default())
                 .map_err(|_| crate::err!("unexpected reply channel closing"))?
         }
         Ok(())

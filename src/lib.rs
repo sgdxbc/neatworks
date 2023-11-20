@@ -3,6 +3,7 @@ pub mod app;
 pub mod crypto;
 pub mod model;
 pub mod net;
+pub mod pbft;
 pub mod replication;
 pub mod submit;
 pub mod task;

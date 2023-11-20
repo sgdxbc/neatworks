@@ -1,34 +1,28 @@
-use std::{collections::HashMap, future::Future};
+use std::{collections::HashMap, future::Future, iter::repeat, sync::Arc};
 
+use borsh::{BorshDeserialize, BorshSerialize};
 use derive_more::From;
-use futures_util::{SinkExt, StreamExt};
-use serde::{Deserialize, Serialize};
 use tokio::{
-    spawn,
-    sync::{
-        mpsc::{unbounded_channel, UnboundedSender},
-        oneshot,
-    },
+    sync::Semaphore,
     task::JoinHandle,
+    time::{timeout_at, Instant},
 };
-use tokio_stream::wrappers::UnboundedReceiverStream;
 
 use crate::{
-    transport::{
-        Source,
-        Transmit::{ToAllReplica, ToClient},
-    },
-    App, SecretKey, Signature, Transport,
+    crypto::{digest, Digest, Message, Packet},
+    model::{event_channel, EventSender, EventSource, Transport},
+    submit::{self, promise_channel, Promise},
+    Client, Replica,
 };
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub struct Request {
     client_id: u32,
     request_num: u32,
     op: Vec<u8>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub struct Reply {
     request_num: u32,
     result: Vec<u8>,
@@ -36,351 +30,595 @@ pub struct Reply {
     view_num: u32,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub struct PrePrepare {
     view_num: u32,
     op_num: u32,
-    digest: Vec<u8>,
+    digest: Digest,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub struct Prepare {
     view_num: u32,
     op_num: u32,
-    digest: Vec<u8>,
+    digest: Digest,
     replica_id: u8,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub struct Commit {
     view_num: u32,
     op_num: u32,
-    digest: Vec<u8>,
+    digest: Digest,
     replica_id: u8,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, From, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub enum ToReplica {
     Request(Request),
-    PrePrepare(PrePrepare, Signature, Vec<Request>),
-    Prepare(Prepare, Signature),
-    Commit(Commit, Signature),
+    PrePrepare(Packet, Vec<Request>),
+    Prepare(Packet),
+    Commit(Packet),
 }
 
-#[derive(Debug)]
-pub struct Client {
-    id: u32,
-    request_num: u32,
-    num_faulty: usize,
-}
+pub async fn client_session(
+    client: Arc<Client>,
+    mut receiver: submit::Receiver<Vec<u8>, Vec<u8>>,
+    mut source: EventSource<Reply>,
+    transport: impl Transport<Request>,
+) -> crate::Result<()> {
+    let mut request_num = 0;
+    let mut primary_replica = 0;
 
-impl Client {
-    pub async fn invoke(
-        &mut self,
-        op: Vec<u8>,
-        mut transport: impl Transport<ToReplica>,
-        mut reply_stream: impl Source<Reply>,
-    ) -> crate::Result<Vec<u8>> {
-        self.request_num += 1;
+    while let Some((op, result)) = receiver.option_next().await {
+        request_num += 1;
         let request = Request {
-            client_id: self.id,
-            request_num: self.request_num,
+            client_id: client.id,
+            request_num,
             op,
         };
+        result.resolve(
+            request_session(
+                &client,
+                request,
+                &mut primary_replica,
+                &mut source,
+                &transport,
+            )
+            .await?,
+        )?
+    }
+    Ok(())
+}
+
+async fn request_session(
+    client: &Client,
+    request: Request,
+    primary_replica: &mut u8,
+    source: &mut EventSource<Reply>,
+    transport: &impl Transport<Request>,
+) -> crate::Result<Vec<u8>> {
+    let mut replies = HashMap::new();
+
+    transport
+        .send_to(
+            client.addr_book.replica_addr(*primary_replica),
+            request.clone(),
+        )
+        .await?;
+    loop {
+        let deadline = Instant::now() + client.retry_interval;
+        while let Ok(reply) = timeout_at(deadline, source.next()).await {
+            let reply = reply?;
+            assert!(reply.request_num <= request.request_num);
+            if reply.request_num == request.request_num {
+                replies.insert(reply.replica_id, reply.clone());
+                if replies
+                    .values()
+                    .filter(|matched_reply| matched_reply.result == reply.result)
+                    .count()
+                    == client.num_faulty + 1
+                {
+                    *primary_replica = (reply.view_num as usize % client.num_replica) as _;
+                    return Ok(reply.result);
+                }
+            }
+        }
         transport
-            .send(ToAllReplica(request.into()))
-            .await
-            .map_err(|_| "transport Request fail")?;
-        let mut replies = HashMap::new();
-        loop {
-            let reply = reply_stream.next().await.ok_or("Reply source fail")?;
-            if reply.request_num != self.request_num {
-                continue;
+            .send_to_all(client.addr_book.replica_addrs(), request.clone())
+            .await?
+    }
+}
+
+#[derive(Debug, From)]
+pub enum ReplicaEvent {
+    Message(ToReplica),
+    ReplyReady(u32, Reply),
+}
+
+pub async fn replica_session(
+    replica: Arc<Replica>,
+    event: EventSender<ReplicaEvent>,
+    mut source: EventSource<ReplicaEvent>,
+    transport: impl Transport<ToReplica>,
+    reply_transport: impl Transport<Reply>,
+) -> crate::Result<()> {
+    for view_num in 0.. {
+        ViewState::new(
+            replica.clone(),
+            view_num,
+            event.clone(),
+            &mut source,
+            transport.clone(),
+            reply_transport.clone(),
+        )
+        .session()
+        .await?;
+        // TODO view change
+    }
+    Ok(())
+}
+
+async fn batch_session(
+    permits: Arc<Semaphore>,
+    mut source: EventSource<Request>,
+) -> crate::Result<Vec<Request>> {
+    let mut requests = vec![source.next().await?];
+    loop {
+        tokio::select! {
+            permit = permits.acquire() => {
+                permit?.forget();
+                break Ok(requests);
             }
-            replies.insert(reply.replica_id, reply.clone());
-            let quorum_size = replies
-                .values()
-                .filter(|other_reply| other_reply.result == reply.result)
-                .count();
-            if quorum_size > self.num_faulty {
-                break Ok(reply.result);
-            }
+            request = source.next(), if requests.len() < 100 => requests.push(request?),
         }
     }
 }
 
-#[derive(Debug, Clone)]
-pub struct Replica {
-    id: u8,
-    secret_key: SecretKey,
-    num_faulty: usize,
+type Quorum<T> = HashMap<u8, Message<T>>;
+
+#[derive(Debug)]
+struct LogEntry {
+    requests: Vec<Request>,
+    #[allow(unused)]
+    pre_prepare: Message<PrePrepare>,
+    #[allow(unused)]
+    prepares: Quorum<Prepare>,
+    commits: Quorum<Commit>,
 }
 
-pub async fn replica_loop(
-    replica: Replica,
-    mut app: impl App,
+async fn prepare_session(
+    replica: Arc<Replica>,
+    pre_prepare: Message<PrePrepare>,
+    requests: Vec<Request>,
+    mut prepare_source: EventSource<Message<Prepare>>,
+    commit_digest: Promise<Digest>,
     transport: impl Transport<ToReplica>,
-    mut reply_transport: impl Transport<Reply>,
-    message_source: impl Source<ToReplica>,
-) -> crate::Result<()> {
-    ViewLoop {
-        replica: replica.clone(),
-        view_num: 0,
-        op_propose: 0,
-        op_commit: 0,
-        do_commits: Default::default(),
+) -> crate::Result<LogEntry> {
+    assert!(pre_prepare.verified);
+    let mut prepares = HashMap::new();
+    if !replica.is_primary(pre_prepare.view_num) {
+        let prepare = Prepare {
+            view_num: pre_prepare.view_num,
+            op_num: pre_prepare.op_num,
+            digest: pre_prepare.digest,
+            replica_id: replica.id,
+        };
+        let prepare = replica.signer.serialize_sign(prepare)?;
+        prepares.insert(replica.id, prepare.clone());
+        replica.send_to_all_replica(ToReplica::Prepare(prepare.into()), transport);
     }
-    .run(&mut app, transport, &mut reply_transport, message_source)
+    while prepares.len() < 2 * replica.num_faulty {
+        let mut prepare = prepare_source.next().await?;
+        assert_eq!(
+            prepare.op_num, pre_prepare.op_num,
+            "incorrect dispatching of {prepare:?}"
+        );
+        if replica.verifiers[&prepare.replica_id]
+            .verify(&mut prepare)
+            .is_ok()
+            && prepare.view_num == pre_prepare.view_num
+            && prepare.digest == pre_prepare.digest
+        {
+            prepares.insert(prepare.replica_id, prepare);
+        }
+    }
+    commit_digest.resolve(pre_prepare.digest)?;
+    Ok(LogEntry {
+        requests,
+        pre_prepare,
+        prepares,
+        commits: Default::default(),
+    })
+}
+
+async fn primary_prepare_session(
+    replica: Arc<Replica>,
+    view_num: u32,
+    op_num: u32,
+    requests: Vec<Request>,
+    prepare_source: EventSource<Message<Prepare>>,
+    commit_digest: Promise<Digest>,
+    transport: impl Transport<ToReplica>,
+) -> crate::Result<LogEntry> {
+    assert!(replica.is_primary(view_num));
+    let pre_prepare = PrePrepare {
+        view_num,
+        op_num,
+        digest: digest(&requests)?,
+    };
+    let pre_prepare = replica.signer.serialize_sign(pre_prepare)?;
+    replica.send_to_all_replica(
+        ToReplica::PrePrepare(pre_prepare.clone().into(), requests.clone()),
+        transport.clone(),
+    );
+    prepare_session(
+        replica,
+        pre_prepare,
+        requests,
+        prepare_source,
+        commit_digest,
+        transport,
+    )
     .await
 }
 
-struct LogEntry {
-    requests: Vec<Request>,
-    pre_prepare: (PrePrepare, Signature),
-    prepares: HashMap<u8, (Prepare, Signature)>,
-    commits: HashMap<u8, (Commit, Signature)>,
-}
-
-struct ViewLoop {
-    replica: Replica,
+async fn backup_prepare_session(
+    replica: Arc<Replica>,
     view_num: u32,
-    op_propose: u32,
-    op_commit: u32,
-    do_commits: HashMap<u32, DoCommitHandle>,
+    mut pre_prepare_source: EventSource<(Message<PrePrepare>, Vec<Request>)>,
+    prepare_source: EventSource<Message<Prepare>>,
+    commit_digest: Promise<Digest>,
+    transport: impl Transport<ToReplica>,
+) -> crate::Result<LogEntry> {
+    loop {
+        let (mut pre_prepare, requests) = pre_prepare_source.next().await?;
+        if replica.verifiers[&replica.primary(pre_prepare.view_num)]
+            .verify(&mut pre_prepare)
+            .is_ok()
+            && pre_prepare.view_num == view_num
+            && pre_prepare.digest == digest(&requests)?
+        {
+            return prepare_session(
+                replica,
+                pre_prepare,
+                requests,
+                prepare_source,
+                commit_digest,
+                transport,
+            )
+            .await;
+        }
+    }
 }
 
-struct DoCommitHandle {
-    handle: JoinHandle<crate::Result<LogEntry>>,
-    pre_prepare: Option<oneshot::Sender<(PrePrepare, Signature, Vec<Request>)>>,
-    prepare: UnboundedSender<(Prepare, Signature)>,
-    commit: UnboundedSender<(Commit, Signature)>,
+async fn commit_session(
+    replica: Arc<Replica>,
+    view_num: u32,
+    op_num: u32,
+    digest: impl Future<Output = crate::Result<Digest>>,
+    mut source: EventSource<Message<Commit>>,
+    transport: impl Transport<ToReplica>,
+) -> crate::Result<Quorum<Commit>> {
+    let digest = digest.await?;
+    let mut commits = HashMap::new();
+    let commit = Commit {
+        view_num,
+        op_num,
+        digest,
+        replica_id: replica.id,
+    };
+    let commit = replica.signer.serialize_sign(commit)?;
+    commits.insert(replica.id, commit.clone());
+    replica.send_to_all_replica(ToReplica::Commit(commit.into()), transport);
+    while commits.len() <= 2 * replica.num_faulty {
+        let mut commit = source.next().await?;
+        assert_eq!(commit.op_num, op_num, "incorrect dispatching of {commit:?}");
+        if replica.verifiers[&commit.replica_id]
+            .verify(&mut commit)
+            .is_ok()
+            && commit.view_num == view_num
+            && commit.digest == digest
+        {
+            commits.insert(commit.replica_id, commit);
+        }
+    }
+    Ok(commits)
 }
 
-impl ViewLoop {
-    async fn run(
-        &mut self,
-        app: &mut impl App,
-        transport: impl Transport<ToReplica>,
-        reply_transport: &mut impl Transport<Reply>,
-        mut message_source: impl Source<ToReplica>,
-    ) -> crate::Result<()> {
-        let (request_tx, request_rx) = unbounded_channel();
-        let (entry_tx, entry_rx) = unbounded_channel();
-        let mut request_source = UnboundedReceiverStream::new(request_rx);
-        let mut entry_source = UnboundedReceiverStream::new(entry_rx);
-        let mut request_loop = RequestLoop {
-            replica: self.replica.clone(),
-            replies: Default::default(),
-            requests: Default::default(),
+#[derive(Debug)]
+struct ViewState<'a, T, U> {
+    replica: Arc<Replica>,
+    view_num: u32,
+    event: EventSender<ReplicaEvent>,
+    source: &'a mut EventSource<ReplicaEvent>,
+    transport: T,
+    reply_transport: U,
+
+    client_entires: HashMap<u32, ClientEntry>,
+    batch_state: Option<BatchState>,
+    propose_op: u32,
+    prepare_op: u32,
+    commit_op: u32,
+    quorum_states: HashMap<u32, QuorumState>,
+    log_entries: HashMap<u32, LogEntry>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum ClientEntry {
+    Committing(u32),
+    Committed(Reply),
+}
+
+#[derive(Debug)]
+struct BatchState {
+    event: EventSender<Request>,
+    session: JoinHandle<crate::Result<Vec<Request>>>,
+    permits: Arc<Semaphore>,
+}
+
+#[derive(Debug)]
+struct QuorumState {
+    prepare_session: JoinHandle<crate::Result<LogEntry>>,
+    commit_session: JoinHandle<crate::Result<Quorum<Commit>>>,
+    pre_prepare_event: Option<EventSender<(Message<PrePrepare>, Vec<Request>)>>,
+    prepare_event: EventSender<Message<Prepare>>,
+    commit_event: EventSender<Message<Commit>>,
+}
+
+impl<'a, T, U> ViewState<'a, T, U>
+where
+    T: Transport<ToReplica>,
+    U: Transport<Reply>,
+{
+    fn new(
+        replica: Arc<Replica>,
+        view_num: u32,
+        event: EventSender<ReplicaEvent>,
+        source: &'a mut EventSource<ReplicaEvent>,
+        transport: T,
+        reply_transport: U,
+    ) -> Self {
+        let batch_state = if replica.is_primary(view_num) {
+            let (event, source) = event_channel();
+            let permits = Arc::new(Semaphore::new(1));
+            Some(BatchState {
+                event,
+                session: tokio::spawn(batch_session(permits.clone(), source)),
+                permits,
+            })
+        } else {
+            None
         };
+        Self {
+            replica,
+            view_num,
+            event,
+            source,
+            transport,
+            reply_transport,
+            client_entires: Default::default(),
+            batch_state,
+            propose_op: Default::default(),
+            prepare_op: Default::default(),
+            commit_op: Default::default(),
+            quorum_states: Default::default(),
+            log_entries: Default::default(),
+        }
+    }
+
+    async fn session(&mut self) -> crate::Result<()> {
         loop {
-            let do_commit = self.do_commits.get_mut(&(self.op_commit + 1));
+            assert!(self.commit_op <= self.prepare_op);
+            // inefficient and anonying workaround for cannot exclusively borrow multiple values
+            // maybe get solved by `get_many_mut` if it get stablized
+            let mut prepare_session = None;
+            let mut commit_session = None;
+            for (&op, state) in &mut self.quorum_states {
+                if op == self.prepare_op + 1 {
+                    prepare_session = Some(&mut state.prepare_session)
+                }
+                if op == self.commit_op + 1 {
+                    commit_session = Some(&mut state.commit_session)
+                }
+            }
             tokio::select! {
-                message = message_source.next() => {
-                    self.handle_message(message.ok_or("message stream fail")?, transport.clone())?
-                }
-                entry = &mut do_commit.unwrap().handle, if do_commit.is_some() => {
-                    self.handle_commit();
-                    entry_tx.send(entry??)?
-                }
-                requests = request_loop.run(
-                    app,
-                    reply_transport,
-                    &mut request_source,
-                    &mut entry_source,
-                ) => {}
+                event = self.source.next() => self.on_event(event?)?,
+                requests = &mut self.batch_state.as_mut().unwrap().session,
+                    if self.batch_state.is_some() => self.on_requests(requests??),
+                entry = prepare_session.unwrap(),
+                    if prepare_session.is_some() => self.on_prepare_quorum(entry??),
+                commits = commit_session.unwrap(),
+                    if commit_session.is_some() => self.on_commit_quorum(commits??),
             }
         }
     }
 
-    fn handle_message(
-        &mut self,
-        message: ToReplica,
-        transport: impl Transport<ToReplica>,
-    ) -> crate::Result<()> {
-        match message {
-            ToReplica::Request(_) => unreachable!(),
-            ToReplica::PrePrepare(pre_prepare, signature, requests) => self
-                .get_or_insert_sender(pre_prepare.op_num, transport.clone())
-                .pre_prepare
-                .take()
-                .map(|tx| {
-                    tx.send((pre_prepare, signature, requests))
-                        .map_err(|_| "PrePrepare send fail")
-                })
-                .unwrap_or(Ok(()))?,
-            ToReplica::Prepare(prepare, signature) => self
-                .get_or_insert_sender(prepare.op_num, transport.clone())
-                .prepare
-                .send((prepare, signature))?,
-            ToReplica::Commit(commit, signature) => self
-                .get_or_insert_sender(commit.op_num, transport.clone())
-                .commit
-                .send((commit, signature))?,
+    fn on_event(&mut self, event: ReplicaEvent) -> crate::Result<()> {
+        match event {
+            ReplicaEvent::Message(ToReplica::Request(request)) => self.handle_request(request)?,
+            ReplicaEvent::Message(ToReplica::PrePrepare(pre_prepare, requests)) => {
+                self.handle_pre_prepare(pre_prepare.deserialize()?, requests)?
+            }
+            ReplicaEvent::Message(ToReplica::Prepare(prepare)) => {
+                self.handle_prepare(prepare.deserialize()?)?
+            }
+            ReplicaEvent::Message(ToReplica::Commit(commit)) => {
+                self.handle_commit(commit.deserialize()?)?
+            }
+            ReplicaEvent::ReplyReady(client_id, reply) => self.handle_reply_ready(client_id, reply),
         }
         Ok(())
     }
 
-    fn get_or_insert_sender(
+    fn handle_request(&mut self, request: Request) -> crate::Result<()> {
+        match self.client_entires.get(&request.client_id) {
+            Some(ClientEntry::Committing(request_num)) if *request_num >= request.request_num => {}
+            Some(ClientEntry::Committed(reply)) if reply.request_num > request.request_num => {}
+            _ => {
+                if !self.replica.is_primary(self.view_num) {
+                    todo!("relay Request to primary")
+                } else {
+                    self.client_entires.insert(
+                        request.client_id,
+                        ClientEntry::Committing(request.request_num),
+                    );
+                    self.batch_state.as_ref().unwrap().event.send(request)?
+                }
+            }
+        }
+        Ok(())
+    }
+
+    fn handle_pre_prepare(
         &mut self,
-        op_num: u32,
-        transport: impl Transport<ToReplica>,
-    ) -> &mut DoCommitHandle {
-        self.do_commits.entry(op_num).or_insert_with(|| {
-            let (pre_prepare_tx, pre_prepare_rx) = oneshot::channel();
-            let (prepare_tx, prepare_rx) = unbounded_channel();
-            let (commit_tx, commit_rx) = unbounded_channel();
-            let handle = spawn(do_commit(
-                self.replica.clone(),
-                self.view_num,
-                transport,
-                async {
-                    let pre_prepare = pre_prepare_rx.await?;
-                    Ok(pre_prepare)
-                },
-                UnboundedReceiverStream::new(prepare_rx),
-                UnboundedReceiverStream::new(commit_rx),
-            ));
-            DoCommitHandle {
-                handle,
-                pre_prepare: Some(pre_prepare_tx),
-                prepare: prepare_tx,
-                commit: commit_tx,
+        pre_prepare: Message<PrePrepare>,
+        requests: Vec<Request>,
+    ) -> crate::Result<()> {
+        self.get_or_insert_quorum_state(pre_prepare.op_num)
+            .pre_prepare_event
+            .as_ref()
+            .expect("PrePrepare EventSender exists")
+            .send((pre_prepare, requests))
+    }
+
+    fn handle_prepare(&mut self, prepare: Message<Prepare>) -> crate::Result<()> {
+        self.get_or_insert_quorum_state(prepare.op_num)
+            .prepare_event
+            .send(prepare)
+    }
+
+    fn handle_commit(&mut self, commit: Message<Commit>) -> crate::Result<()> {
+        self.get_or_insert_quorum_state(commit.op_num)
+            .commit_event
+            .send(commit)
+    }
+
+    fn get_or_insert_quorum_state(&mut self, op_num: u32) -> &mut QuorumState {
+        assert!(!self.replica.is_primary(self.view_num));
+        self.quorum_states.entry(op_num).or_insert_with(|| {
+            let (pre_prepare_event, pre_prepare_source) = event_channel();
+            let (prepare_event, prepare_source) = event_channel();
+            let (commit_event, commit_source) = event_channel();
+            let (commit_digest, digest) = promise_channel();
+            QuorumState {
+                prepare_session: tokio::spawn(backup_prepare_session(
+                    self.replica.clone(),
+                    self.view_num,
+                    pre_prepare_source,
+                    prepare_source,
+                    commit_digest,
+                    self.transport.clone(),
+                )),
+                commit_session: tokio::spawn(commit_session(
+                    self.replica.clone(),
+                    self.view_num,
+                    op_num,
+                    async move { Ok(digest.await?) },
+                    commit_source,
+                    self.transport.clone(),
+                )),
+                pre_prepare_event: Some(pre_prepare_event),
+                prepare_event,
+                commit_event,
             }
         })
     }
 
-    fn handle_commit(&mut self) {
-        self.do_commits.remove(&self.op_commit).unwrap();
+    fn handle_reply_ready(&mut self, client_id: u32, reply: Reply) {
+        match self
+            .client_entires
+            .insert(client_id, ClientEntry::Committed(reply.clone()))
+        {
+            Some(ClientEntry::Committing(request_num)) if request_num == reply.request_num => self
+                .replica
+                .send_to_client(client_id, reply, self.reply_transport.clone()),
+            Some(ClientEntry::Committing(request_num)) if request_num > reply.request_num => {}
+            _ => unreachable!(),
+        }
     }
-}
 
-struct RequestLoop {
-    replica: Replica,
-    replies: HashMap<u32, Reply>,
-    requests: Vec<Request>,
-}
+    fn on_requests(&mut self, requests: Vec<Request>) {
+        assert!(self.replica.is_primary(self.view_num));
+        self.propose_op += 1;
+        let (prepare_event, prepare_source) = event_channel();
+        let (commit_event, commit_source) = event_channel();
+        let (commit_digest, digest) = promise_channel();
+        self.quorum_states.insert(
+            self.propose_op,
+            QuorumState {
+                prepare_session: tokio::spawn(primary_prepare_session(
+                    self.replica.clone(),
+                    self.view_num,
+                    self.propose_op,
+                    requests,
+                    prepare_source,
+                    commit_digest,
+                    self.transport.clone(),
+                )),
+                commit_session: tokio::spawn(commit_session(
+                    self.replica.clone(),
+                    self.view_num,
+                    self.propose_op,
+                    async move { Ok(digest.await?) },
+                    commit_source,
+                    self.transport.clone(),
+                )),
+                pre_prepare_event: None,
+                prepare_event,
+                commit_event,
+            },
+        );
+    }
 
-impl RequestLoop {
-    async fn run(
-        &mut self,
-        app: &mut impl App,
-        reply_transport: &mut impl Transport<Reply>,
-        request_source: &mut impl Source<Request>,
-        entry_source: &mut impl Source<LogEntry>,
-    ) -> crate::Result<()> {
-        loop {
-            tokio::select! {
-                request = request_source.next() => {
-                    self.handle_request(request.ok_or("request source fail")?, reply_transport).await?
-                }
-                entry = entry_source.next() => {
-                    self.handle_entry(entry.ok_or("entry source fail")?, reply_transport, app).await?
-                }
+    fn on_prepare_quorum(&mut self, entry: LogEntry) {
+        self.prepare_op += 1;
+        for request in &entry.requests {
+            if self.replica.is_primary(self.view_num) {
+                assert_eq!(
+                    self.client_entires.get(&request.client_id),
+                    Some(&ClientEntry::Committing(request.request_num))
+                )
+            } else {
+                self.client_entires.insert(
+                    request.client_id,
+                    ClientEntry::Committing(request.request_num),
+                );
             }
         }
+        self.log_entries.insert(self.prepare_op, entry);
     }
 
-    async fn handle_request(
-        &mut self,
-        request: Request,
-        reply_transport: &mut impl Transport<Reply>,
-    ) -> crate::Result<()> {
-        match self.replies.get(&request.client_id) {
-            Some(reply) if reply.request_num > request.request_num => {}
-            Some(reply) if reply.request_num == request.request_num => reply_transport
-                .send(ToClient(request.client_id, reply.clone()))
-                .await
-                .map_err(|_| "transport Reply fail")?,
-            _ => self.requests.push(request),
-        }
-        Ok(())
-    }
+    fn on_commit_quorum(&mut self, commits: Quorum<Commit>) {
+        self.commit_op += 1;
+        let entry = self
+            .log_entries
+            .get_mut(&self.commit_op)
+            .expect("committed log entry exists");
+        entry.commits = commits;
 
-    async fn handle_entry(
-        &mut self,
-        entry: LogEntry,
-        reply_transport: &mut impl Transport<Reply>,
-        app: &mut impl App,
-    ) -> crate::Result<()> {
-        let view_num = entry.pre_prepare.0.view_num;
-        for request in entry.requests {
-            let result = app.execute(&request.op).await;
-            let reply = Reply {
-                request_num: request.request_num,
-                result,
-                replica_id: self.replica.id,
-                view_num,
-            };
-            let evicted = self.replies.insert(request.client_id, reply.clone());
-            if let Some(evicted) = evicted {
-                assert!(evicted.request_num < reply.request_num);
-            }
-            reply_transport
-                .send(ToClient(request.client_id, reply))
-                .await
-                .map_err(|_| "transport Reply fail")?
+        let replica_id = self.replica.id;
+        let view_num = self.view_num;
+        for ((request, app), event) in entry
+            .requests
+            .iter()
+            .cloned()
+            .zip(repeat(self.replica.app.clone()))
+            .zip(repeat(self.event.clone()))
+        {
+            self.replica.spawner.spawn(async move {
+                let reply = Reply {
+                    request_num: request.request_num,
+                    result: app.submit(request.op).await?,
+                    replica_id,
+                    view_num,
+                };
+                event.send(ReplicaEvent::ReplyReady(request.client_id, reply))
+            });
         }
-        Ok(())
-    }
-}
 
-async fn do_commit(
-    replica: Replica,
-    view_num: u32,
-    mut transport: impl Transport<ToReplica>,
-    pre_prepare: impl Future<Output = crate::Result<(PrePrepare, Signature, Vec<Request>)>> + Send,
-    mut prepare_source: impl Source<(Prepare, Signature)>,
-    mut commit_source: impl Source<(Commit, Signature)>,
-) -> crate::Result<LogEntry> {
-    let pre_prepare = pre_prepare.await?;
-    assert_eq!(pre_prepare.0.view_num, view_num);
-    let op_num = pre_prepare.0.op_num;
-    let digest = pre_prepare.0.digest.clone();
-    let prepare = Prepare {
-        view_num,
-        op_num,
-        digest: digest.clone(),
-        replica_id: replica.id,
-    };
-    let signature = crate::signature(&prepare, &replica.secret_key);
-    transport
-        .send(ToAllReplica((prepare.clone(), signature).into()))
-        .await
-        .map_err(|_| "transport preprare fail")?;
-    let mut prepares = HashMap::new();
-    prepares.insert(replica.id, (prepare, signature));
-    while prepares.len() < 2 * replica.num_faulty + 1 {
-        let (prepare, signature) = prepare_source.next().await.ok_or("prepare stream fail")?;
-        assert_eq!(prepare.op_num, op_num);
-        if prepare.view_num == view_num && prepare.digest == digest {
-            prepares.insert(prepare.replica_id, (prepare, signature));
+        if self.replica.is_primary(self.view_num) {
+            self.batch_state.as_ref().unwrap().permits.add_permits(1)
         }
     }
-    let commit = Commit {
-        view_num,
-        op_num,
-        digest: digest.clone(),
-        replica_id: replica.id,
-    };
-    let signature = crate::signature(&commit, &replica.secret_key);
-    transport
-        .send(ToAllReplica((commit.clone(), signature).into()))
-        .await
-        .map_err(|_| "transport commit fail")?;
-    let mut commits = HashMap::new();
-    commits.insert(replica.id, (commit, signature));
-    while commits.len() < 2 * replica.num_faulty + 1 {
-        let (commit, signature) = commit_source.next().await.ok_or("commit stream fail")?;
-        assert_eq!(commit.op_num, op_num);
-        if commit.view_num == view_num && commit.digest == digest {
-            commits.insert(commit.replica_id, (commit, signature));
-        }
-    }
-    Ok(LogEntry {
-        requests: pre_prepare.2,
-        pre_prepare: (pre_prepare.0, pre_prepare.1),
-        prepares,
-        commits,
-    })
 }

@@ -37,7 +37,7 @@ pub async fn client_session(
             request_num,
             op,
         };
-        result.send(request_session(&client, request, &mut source, &transport).await?)?
+        result.resolve(request_session(&client, request, &mut source, &transport).await?)?
     }
     Ok(())
 }
@@ -53,11 +53,8 @@ async fn request_session(
             .send_to(client.addr_book.replica_addr(0), request.clone())
             .await?;
         let deadline = Instant::now() + client.retry_interval;
-        loop {
-            let reply = match timeout_at(deadline, source.next()).await {
-                Ok(reply) => reply?,
-                Err(_) => break,
-            };
+        while let Ok(reply) = timeout_at(deadline, source.next()).await {
+            let reply = reply?;
             assert!(reply.request_num <= request.request_num);
             if reply.request_num == request.request_num {
                 return Ok(reply.result);
@@ -72,6 +69,7 @@ pub enum ReplicaEvent {
     ReplyReady(u32, Reply),
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
 enum ClientEntry {
     Submitted(u32),
     Replied(Reply),
@@ -91,46 +89,42 @@ pub async fn replica_session(
             .await
             .expect("self-holding sender keeps source opening")
         {
-            ReplicaEvent::Message(request) => {
-                match entries.get(&request.client_id) {
-                    Some(ClientEntry::Submitted(request_num))
-                        if *request_num >= request.request_num =>
-                    {
-                        continue
-                    }
-                    Some(ClientEntry::Replied(reply))
-                        if reply.request_num > request.request_num =>
-                    {
-                        continue
-                    }
-                    Some(ClientEntry::Replied(reply))
-                        if reply.request_num == request.request_num =>
-                    {
-                        replica.send_to_client(
-                            request.client_id,
-                            reply.clone(),
-                            reply_transport.clone(),
-                        );
-                        continue;
-                    }
-                    _ => {}
+            ReplicaEvent::Message(request) => match entries.get(&request.client_id) {
+                Some(ClientEntry::Submitted(request_num))
+                    if *request_num >= request.request_num =>
+                {
+                    continue
                 }
-                entries.insert(
-                    request.client_id,
-                    ClientEntry::Submitted(request.request_num),
-                );
-                let event = event.clone();
-                let app = replica.app.clone();
-                replica.spawner.spawn(async move {
-                    let reply = Reply {
-                        request_num: request.request_num,
-                        result: app.submit(request.op).await?,
-                    };
-                    event.send(ReplicaEvent::ReplyReady(request.client_id, reply))
-                })
-            }
+                Some(ClientEntry::Replied(reply)) if reply.request_num > request.request_num => {
+                    continue
+                }
+                Some(ClientEntry::Replied(reply)) if reply.request_num == request.request_num => {
+                    replica.send_to_client(
+                        request.client_id,
+                        reply.clone(),
+                        reply_transport.clone(),
+                    );
+                    continue;
+                }
+                _ => {
+                    entries.insert(
+                        request.client_id,
+                        ClientEntry::Submitted(request.request_num),
+                    );
+                    let event = event.clone();
+                    let app = replica.app.clone();
+                    replica.spawner.spawn(async move {
+                        let reply = Reply {
+                            request_num: request.request_num,
+                            result: app.submit(request.op).await?,
+                        };
+                        event.send(ReplicaEvent::ReplyReady(request.client_id, reply))
+                    })
+                }
+            },
             ReplicaEvent::ReplyReady(client_id, reply) => {
-                entries.insert(client_id, ClientEntry::Replied(reply.clone()));
+                let evicted = entries.insert(client_id, ClientEntry::Replied(reply.clone()));
+                assert_eq!(evicted, Some(ClientEntry::Submitted(reply.request_num)));
                 replica.send_to_client(client_id, reply, reply_transport.clone());
             }
         }

@@ -1,9 +1,20 @@
-use std::ops::{Deref, DerefMut};
+use std::ops::Deref;
 
 use borsh::{BorshDeserialize, BorshSerialize};
 
+pub type Digest = [u8; 32];
+
+pub fn digest(data: &impl BorshSerialize) -> crate::Result<Digest> {
+    Ok(
+        *secp256k1::Message::from_hashed_data::<secp256k1::hashes::sha256::Hash>(&borsh::to_vec(
+            data,
+        )?)
+        .as_ref(),
+    )
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Untrusted {
+pub struct Packet {
     signature: Signature,
     inner: Vec<u8>,
 }
@@ -11,14 +22,14 @@ pub struct Untrusted {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub struct Signature([u8; 64]);
 
-impl BorshSerialize for Untrusted {
+impl BorshSerialize for Packet {
     fn serialize<W: std::io::Write>(&self, writer: &mut W) -> std::io::Result<()> {
         self.signature.serialize(writer)?;
         writer.write_all(&self.inner)
     }
 }
 
-impl BorshDeserialize for Untrusted {
+impl BorshDeserialize for Packet {
     fn deserialize_reader<R: std::io::Read>(reader: &mut R) -> std::io::Result<Self> {
         let signature = Signature::deserialize_reader(reader)?;
         let mut inner = Vec::new();
@@ -28,13 +39,14 @@ impl BorshDeserialize for Untrusted {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Verified<M> {
+pub struct Message<M> {
     pub signature: Signature,
     pub inner: M,
-    serialized_inner: Vec<u8>,
+    pub verified: bool,
+    inner_bytes: Vec<u8>,
 }
 
-impl<M> Deref for Verified<M> {
+impl<M> Deref for Message<M> {
     type Target = M;
 
     fn deref(&self) -> &Self::Target {
@@ -42,18 +54,26 @@ impl<M> Deref for Verified<M> {
     }
 }
 
-impl<M> DerefMut for Verified<M> {
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut self.inner
+impl<M> From<Message<M>> for Packet {
+    fn from(value: Message<M>) -> Self {
+        Self {
+            inner: value.inner_bytes,
+            signature: value.signature,
+        }
     }
 }
 
-impl<M> From<Verified<M>> for Untrusted {
-    fn from(value: Verified<M>) -> Self {
-        Self {
-            inner: value.serialized_inner,
-            signature: value.signature,
-        }
+impl Packet {
+    pub fn deserialize<M>(self) -> crate::Result<Message<M>>
+    where
+        M: BorshDeserialize,
+    {
+        Ok(Message {
+            signature: self.signature,
+            inner: borsh::from_slice(&self.inner)?,
+            inner_bytes: self.inner,
+            verified: false,
+        })
     }
 }
 
@@ -61,7 +81,7 @@ impl<M> From<Verified<M>> for Untrusted {
 pub struct Signer(secp256k1::SecretKey);
 
 impl Signer {
-    pub fn serialize_sign<M>(&self, message: M) -> crate::Result<Verified<M>>
+    pub fn serialize_sign<M>(&self, message: M) -> crate::Result<Message<M>>
     where
         M: BorshSerialize,
     {
@@ -76,10 +96,11 @@ impl Signer {
             SECP.with(|secp| secp.sign_ecdsa(&hash, &self.0))
                 .serialize_compact(),
         );
-        Ok(Verified {
+        Ok(Message {
             signature,
             inner: message,
-            serialized_inner,
+            verified: true,
+            inner_bytes: serialized_inner,
         })
     }
 }
@@ -88,18 +109,18 @@ impl Signer {
 pub struct Verifier(secp256k1::PublicKey);
 
 impl Verifier {
-    pub fn verify_deserialize<M>(self, untrusted: Untrusted) -> crate::Result<Verified<M>>
-    where
-        M: BorshDeserialize,
-    {
+    pub fn verify<M>(&self, message: &mut Message<M>) -> crate::Result<()> {
+        if message.verified {
+            return Ok(());
+        }
         let hash = secp256k1::Message::from_hashed_data::<secp256k1::hashes::sha256::Hash>(
-            &untrusted.inner,
+            &message.inner_bytes,
         );
         thread_local! {
             static SECP: secp256k1::Secp256k1<secp256k1::VerifyOnly> =
                 secp256k1::Secp256k1::verification_only();
         }
-        let Signature(signature) = &untrusted.signature;
+        let Signature(signature) = &message.signature;
         SECP.with(|secp| {
             secp.verify_ecdsa(
                 &hash,
@@ -107,10 +128,7 @@ impl Verifier {
                 &self.0,
             )
         })?;
-        Ok(Verified {
-            signature: untrusted.signature,
-            inner: borsh::from_slice(&untrusted.inner)?,
-            serialized_inner: untrusted.inner,
-        })
+        message.verified = true;
+        Ok(())
     }
 }

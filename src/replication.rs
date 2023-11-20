@@ -119,6 +119,14 @@ pub struct Replica {
 }
 
 impl Replica {
+    pub fn primary(&self, view_num: u32) -> u8 {
+        (view_num as usize % self.num_replica) as _
+    }
+
+    pub fn is_primary(&self, view_num: u32) -> bool {
+        self.id == self.primary(view_num)
+    }
+
     pub fn send_to_replica<M>(&self, id: u8, message: M, transport: impl Transport<M>)
     where
         M: Message,
