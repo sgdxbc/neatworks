@@ -38,6 +38,36 @@ pub fn event_channel<M>() -> (EventSender<M>, EventSource<M>) {
     (EventSender(channel.0), EventSource(channel.1))
 }
 
+#[derive(Debug)]
+pub struct PromiseSender<T>(tokio::sync::oneshot::Sender<T>);
+
+pub type PromiseSource<T> = tokio::sync::oneshot::Receiver<T>;
+
+pub fn promise_channel<T>() -> (PromiseSender<T>, PromiseSource<T>) {
+    let chan = tokio::sync::oneshot::channel();
+    (PromiseSender(chan.0), chan.1)
+}
+
+impl<T> PromiseSender<T> {
+    pub fn resolve(self, value: T) -> crate::Result<()> {
+        self.0
+            .send(value)
+            .map_err(|_| crate::err!("unexpected return channel closing"))
+    }
+}
+
+pub type SubmitHandle<T, U> = EventSender<(T, PromiseSender<U>)>;
+
+impl<T, U> SubmitHandle<T, U> {
+    pub async fn submit(&self, op: T) -> crate::Result<U> {
+        let chan = promise_channel();
+        self.send((op, chan.0))?;
+        Ok(chan.1.await?)
+    }
+}
+
+pub type SubmitSource<T, U> = EventSource<(T, PromiseSender<U>)>;
+
 pub trait Message
 where
     Self: Clone + Send + Sync + 'static,
@@ -46,20 +76,26 @@ where
 
 impl<M> Message for M where M: Clone + Send + Sync + 'static {}
 
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum Addr {
+    Socket(std::net::SocketAddr),
+    Untyped(String),
+}
+
 #[async_trait::async_trait]
 pub trait Transport<M>
 where
     Self: Clone + Send + Sync + 'static,
 {
-    fn addr(&self) -> crate::Addr;
+    fn addr(&self) -> Addr;
 
-    async fn send_to(&self, destination: crate::Addr, message: M) -> crate::Result<()>
+    async fn send_to(&self, destination: Addr, message: M) -> crate::Result<()>
     where
         M: Message;
 
     async fn send_to_all(
         &self,
-        destinations: impl Iterator<Item = crate::Addr> + Send,
+        destinations: impl Iterator<Item = Addr> + Send,
         message: M,
     ) -> crate::Result<()>
     where

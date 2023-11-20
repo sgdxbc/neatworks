@@ -4,7 +4,7 @@ use borsh::{BorshDeserialize, BorshSerialize};
 use derive_more::From;
 use tokio::sync::mpsc::UnboundedSender;
 
-use crate::model::{Message, Transport};
+use crate::model::{Addr, Message, Transport};
 
 #[derive(Debug, Clone, From)]
 pub struct UdpSocket(Arc<tokio::net::UdpSocket>);
@@ -45,15 +45,15 @@ where
     M: Into<N> + Send + 'static,
     N: BorshSerialize + Send + Sync + 'static,
 {
-    fn addr(&self) -> crate::Addr {
-        crate::Addr::Socket(self.0.local_addr().expect("retrievable local address"))
+    fn addr(&self) -> Addr {
+        Addr::Socket(self.0.local_addr().expect("retrievable local address"))
     }
 
-    async fn send_to(&self, destination: crate::Addr, message: M) -> crate::Result<()>
+    async fn send_to(&self, destination: Addr, message: M) -> crate::Result<()>
     where
         M: Message,
     {
-        let crate::Addr::Socket(destination) = destination else {
+        let Addr::Socket(destination) = destination else {
             crate::bail!("unsupported destination kind {destination:?}")
         };
         let buf = borsh::to_vec(&message.into())?;

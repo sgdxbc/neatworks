@@ -10,8 +10,10 @@ use tokio::{
 
 use crate::{
     crypto::{digest, Digest, Message, Packet},
-    model::{event_channel, EventSender, EventSource, Transport},
-    submit::{self, promise_channel, Promise},
+    model::{
+        event_channel, promise_channel, EventSender, EventSource, PromiseSender, SubmitSource,
+        Transport,
+    },
     Client, Replica,
 };
 
@@ -63,7 +65,7 @@ pub enum ToReplica {
 
 pub async fn client_session(
     client: Arc<Client>,
-    mut receiver: submit::Receiver<Vec<u8>, Vec<u8>>,
+    mut receiver: SubmitSource<Vec<u8>, Vec<u8>>,
     mut source: EventSource<Reply>,
     transport: impl Transport<Request>,
 ) -> crate::Result<()> {
@@ -192,7 +194,7 @@ async fn prepare_session(
     pre_prepare: Message<PrePrepare>,
     requests: Vec<Request>,
     mut prepare_source: EventSource<Message<Prepare>>,
-    commit_digest: Promise<Digest>,
+    commit_digest: PromiseSender<Digest>,
     transport: impl Transport<ToReplica>,
 ) -> crate::Result<LogEntry> {
     assert!(pre_prepare.verified);
@@ -238,7 +240,7 @@ async fn primary_prepare_session(
     op_num: u32,
     requests: Vec<Request>,
     prepare_source: EventSource<Message<Prepare>>,
-    commit_digest: Promise<Digest>,
+    commit_digest: PromiseSender<Digest>,
     transport: impl Transport<ToReplica>,
 ) -> crate::Result<LogEntry> {
     assert!(replica.is_primary(view_num));
@@ -268,7 +270,7 @@ async fn backup_prepare_session(
     view_num: u32,
     mut pre_prepare_source: EventSource<(Message<PrePrepare>, Vec<Request>)>,
     prepare_source: EventSource<Message<Prepare>>,
-    commit_digest: Promise<Digest>,
+    commit_digest: PromiseSender<Digest>,
     transport: impl Transport<ToReplica>,
 ) -> crate::Result<LogEntry> {
     loop {

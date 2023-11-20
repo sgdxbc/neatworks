@@ -8,10 +8,8 @@ use borsh::{BorshDeserialize, BorshSerialize};
 
 use crate::{
     crypto::{Signer, Verifier},
-    model::{Message, Transport},
-    submit::Handle,
+    model::{Addr, Message, SubmitHandle, Transport},
     task::BackgroundSpawner,
-    Addr,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -111,7 +109,7 @@ pub struct Replica {
     pub id: u8,
     pub num_replica: usize,
     pub num_faulty: usize,
-    pub app: Handle<Vec<u8>, Vec<u8>>,
+    pub app: SubmitHandle<Vec<u8>, Vec<u8>>,
     pub spawner: BackgroundSpawner,
     pub signer: Signer,
     pub verifiers: HashMap<u8, Verifier>,

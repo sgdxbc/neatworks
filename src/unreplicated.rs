@@ -5,8 +5,8 @@ use derive_more::From;
 use tokio::time::{timeout_at, Instant};
 
 use crate::{
-    model::{EventSender, EventSource, Transport},
-    submit, Client, Replica,
+    model::{EventSender, EventSource, SubmitSource, Transport},
+    Client, Replica,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, BorshSerialize, BorshDeserialize)]
@@ -24,7 +24,7 @@ pub struct Reply {
 
 pub async fn client_session(
     client: Arc<Client>,
-    mut receiver: submit::Receiver<Vec<u8>, Vec<u8>>,
+    mut receiver: SubmitSource<Vec<u8>, Vec<u8>>,
     mut source: EventSource<Reply>,
     transport: impl Transport<Request>,
 ) -> crate::Result<()> {
