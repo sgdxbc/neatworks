@@ -17,3 +17,22 @@ Secondly, Tokio is also used as a library for message passing with channels prov
 * `src/model.rs` general abstractions and encapsulations for implementing applications, currently including transportation abstraction and various channel types.
 * `src/task.rs` useful helpers for working with background tasks.
 * `src/crypto.rs` wire and in-memory format for digitally signed messages, and signing/verifying operations.
+
+**Transportation with multiplex.** The `Transport<M>` trait in `src/model.rs` provides transportation for message type `M`. The implementations of this trait e.g. `UdpTransport<N>`, however, takes another type parameter `N`, and implement `Transport<M>` whenever `M: Into<N>`. This would allow sessions to be multiplexed together by sharing the same transportation, thus share the same network channel.
+
+For example, a session A may keep session B and session C as its sub-sessions, and define its on-wire message format as:
+
+```rust
+#[derive(From)]
+enum AMessage {
+    B(BMessage),
+    C(CMessage),
+    // other variants that produced by A itself
+}
+```
+
+Then a `UdpTransport<A>` implements both `Transport<BMessage>` and `Transport<CMessage>` by wrapping them into `AMessage` before transmitting, so the transport can be shared with the sub-sessions. The sub-sessions can be agnostic to this fact by working with `impl Transport<BMessage>` and `impl Transport<CMessage>`. Notice that the incoming messages for the sub-sessions will end up in session A's event loop, so session A should relay the messages into sub-sessions event loop manually, act as a middleware if necessary.
+
+**Monitor background tasks.** Applications should avoid spawn detached tasks. Besides potential memory leaking, a detached task may panic without panicking the whole process, affect other tasks in unpredictable ways.
+
+Applications are encouraged to join spawned tasks. For long-running tasks, spawn them with `BackgroundSpawner` from `src/task.rs` instead of detach them. So the error will be propagated if the task returns error or panics, and the task can be canceled if necessary.

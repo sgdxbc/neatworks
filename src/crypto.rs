@@ -1,3 +1,10 @@
+//! Digital signature solution.
+//!
+//! In this design, signing/verifying is performed against *serialized* messages
+//! (`Packet`s) to avoid double traversal for serializing and hashing.
+//! `borsh` is used for deterministic serialization, so every type that will
+//! get signed or hashed should derive `BorshSerialize`.
+
 use std::ops::Deref;
 
 use borsh::{BorshDeserialize, BorshSerialize};
@@ -13,6 +20,7 @@ pub fn digest(data: &impl BorshSerialize) -> crate::Result<Digest> {
     )
 }
 
+/// On-wire format of signed messages. Happen to be type-erasured.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Packet {
     signature: Signature,
@@ -38,6 +46,11 @@ impl BorshDeserialize for Packet {
     }
 }
 
+/// In-memory representation of `M`, equiped with a signature that may or may 
+/// not be verified.
+/// 
+/// If `inner` is mutated, the `inner_bytes` and `signature` may get out of sync
+/// with it, so keep `Message<M>` read only.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Message<M> {
     pub signature: Signature,
