@@ -8,6 +8,47 @@ Concurrent applications are usually implemented as stateless, *microservice* sty
 
 This codebase tries to develop a programming pattern that is suitable for concurrent stateful applications. Code snippets are grouped into *sessions*, which contain logic that connected with causal dependencies. Code in different sessions are causally independent to each other, thus share no state and can be concurrently executed. Each session is an asynchronous task (or coroutine) that drives its own event loop. A session has full control of what to be expected from event loop and even when to block on receiving events.
 
+The goal is to have *streamlined* code. The code skeleton is like:
+
+```rust
+async fn a_session(
+    // immutable arguments
+    // message channels and transportations
+) -> crate::Result<()> {
+    // declare mutable states
+
+    // everything here happens sequentially, the code comes later executes later
+}
+
+async fn b_session() {
+    // everything here is concurrent to everything in `a_session`
+}
+
+// example of complicated sessions which may take too many arguments as a 
+// function
+struct CState {
+    // immutable arguments
+    // message channels and transportations
+    // mutable states
+}
+
+impl CState {
+    pub fn new(
+        // immutable arguments
+        // message channels and transportations
+    ) -> Self {
+        Self {
+            // move arguments
+            // initialize mutable states
+        }
+    }
+
+    pub async fn session(&mut self) {
+        // similar to above
+    }
+}
+```
+
 **The usage of Tokio.** The codebase relies on Tokio in two different aspects. Firstly, concurrency is encoded through `spawn` and `select!`, which as used as concurrency primitives. Applications are directly coupled with them.
 
 Secondly, Tokio is also used as a library for message passing with channels provided by `tokio::sync` and interacting with external world through transportation implementation and time primitives. These are mostly decoupled with applications and could be interchangeable with other libraries if desired.
