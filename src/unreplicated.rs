@@ -24,13 +24,13 @@ pub struct Reply {
 
 pub async fn client_session(
     client: Arc<Client>,
-    mut receiver: SubmitSource<Vec<u8>, Vec<u8>>,
+    mut invoke_source: SubmitSource<Vec<u8>, Vec<u8>>,
     mut source: EventSource<Reply>,
     transport: impl Transport<Request>,
 ) -> crate::Result<()> {
     let mut request_num = 0;
 
-    while let Some((op, result)) = receiver.option_next().await {
+    while let Some((op, result)) = invoke_source.option_next().await {
         request_num += 1;
         let request = Request {
             client_id: client.id,
@@ -81,7 +81,7 @@ pub async fn replica_session(
     mut source: EventSource<ReplicaEvent>,
     reply_transport: impl Transport<Reply>,
 ) -> crate::Result<()> {
-    let mut entries = HashMap::<_, ClientEntry>::new();
+    let mut entries = HashMap::new();
 
     loop {
         match source

@@ -65,14 +65,14 @@ pub enum ToReplica {
 
 pub async fn client_session(
     client: Arc<Client>,
-    mut receiver: SubmitSource<Vec<u8>, Vec<u8>>,
+    mut invoke_source: SubmitSource<Vec<u8>, Vec<u8>>,
     mut source: EventSource<Reply>,
     transport: impl Transport<Request>,
 ) -> crate::Result<()> {
     let mut request_num = 0;
     let mut primary_replica = 0;
 
-    while let Some((op, result)) = receiver.option_next().await {
+    while let Some((op, result)) = invoke_source.option_next().await {
         request_num += 1;
         let request = Request {
             client_id: client.id,
@@ -121,7 +121,7 @@ async fn request_session(
                     .count()
                     == client.num_faulty + 1
                 {
-                    *primary_replica = (reply.view_num as usize % client.num_replica) as _;
+                    *primary_replica = client.primary_replica(reply.view_num);
                     return Ok(reply.result);
                 }
             }

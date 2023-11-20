@@ -1,3 +1,7 @@
+//! Common structures and methods for implementing replication protocols. Kind 
+//! of like `Configuration` and `Replica` and `Client` base classes in 
+//! SpecPaxos.
+
 use std::{
     collections::{BTreeMap, HashMap},
     net::SocketAddr,
@@ -162,4 +166,10 @@ pub struct Client {
     pub spawner: BackgroundSpawner,
     pub addr_book: AddrBook,
     pub retry_interval: Duration,
+}
+
+impl Client {
+    pub fn primary_replica(&self, view_num: u32) -> u8 {
+        (view_num as usize % self.num_replica) as _
+    }
 }
