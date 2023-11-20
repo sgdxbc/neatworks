@@ -72,7 +72,7 @@ enum AMessage {
 }
 ```
 
-Then a `UdpTransport<A>` implements both `Transport<BMessage>` and `Transport<CMessage>` by wrapping them into `AMessage` before transmitting, so the transport can be shared with the sub-sessions. The sub-sessions can be agnostic to this fact by working with `impl Transport<BMessage>` and `impl Transport<CMessage>`. Notice that the incoming messages for the sub-sessions will end up in session A's event loop, so session A should relay the messages into sub-sessions event loop manually, act as a middleware if necessary.
+Then a `UdpTransport<AMessage>` implements both `Transport<BMessage>` and `Transport<CMessage>` by wrapping them into `AMessage` before transmitting, so session A can shared the transport with the sub-sessions. By working with `impl Transport<BMessage>` and `impl Transport<CMessage>`, sub-sessions are unmodified for the fact that all sessions are sending messages in the form of `AMessage`. Notice that the incoming messages for the sub-sessions will end up in session A's event loop, so session A should relay the messages into sub-sessions event loop manually, act as a middleware if necessary.
 
 **Monitor background tasks.** Applications should avoid spawn detached tasks. Besides potential memory leaking, a detached task may panic without panicking the whole process, affect other tasks in unpredictable ways.
 

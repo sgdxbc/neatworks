@@ -216,6 +216,13 @@ async fn prepare_session(
             prepare.op_num, pre_prepare.op_num,
             "incorrect dispatching of {prepare:?}"
         );
+        // the verification of `Prepare`s (and `PrePrepare`s and `Commit`s below) can have some
+        // concurrency by lifting this verification out of the loop. however, "whether or not
+        // verify the following message" actually depends on the result of all previous
+        // verifications. in another word, an incoming message will be unconditionally verified
+        // even if there are already sufficient valid messages to form a quorum collected. This
+        // basically means 50% more verification overhead, which is silly
+        // nevertheless the protocol will always concurrently work on different op numbers
         if replica.verifiers[&prepare.replica_id]
             .verify(&mut prepare)
             .is_ok()
@@ -448,7 +455,7 @@ where
             ReplicaEvent::Message(ToReplica::Commit(commit)) => {
                 self.handle_commit(commit.deserialize()?)?
             }
-            ReplicaEvent::ReplyReady(client_id, reply) => self.handle_reply_ready(client_id, reply),
+            ReplicaEvent::ReplyReady(client_id, reply) => self.on_reply_ready(client_id, reply),
         }
         Ok(())
     }
@@ -470,74 +477,6 @@ where
             }
         }
         Ok(())
-    }
-
-    fn handle_pre_prepare(
-        &mut self,
-        pre_prepare: Message<PrePrepare>,
-        requests: Vec<Request>,
-    ) -> crate::Result<()> {
-        self.get_or_insert_quorum_state(pre_prepare.op_num)
-            .pre_prepare_event
-            .as_ref()
-            .expect("PrePrepare EventSender exists")
-            .send((pre_prepare, requests))
-    }
-
-    fn handle_prepare(&mut self, prepare: Message<Prepare>) -> crate::Result<()> {
-        self.get_or_insert_quorum_state(prepare.op_num)
-            .prepare_event
-            .send(prepare)
-    }
-
-    fn handle_commit(&mut self, commit: Message<Commit>) -> crate::Result<()> {
-        self.get_or_insert_quorum_state(commit.op_num)
-            .commit_event
-            .send(commit)
-    }
-
-    fn get_or_insert_quorum_state(&mut self, op_num: u32) -> &mut QuorumState {
-        assert!(!self.replica.is_primary(self.view_num));
-        self.quorum_states.entry(op_num).or_insert_with(|| {
-            let (pre_prepare_event, pre_prepare_source) = event_channel();
-            let (prepare_event, prepare_source) = event_channel();
-            let (commit_event, commit_source) = event_channel();
-            let (commit_digest, digest) = promise_channel();
-            QuorumState {
-                prepare_session: tokio::spawn(backup_prepare_session(
-                    self.replica.clone(),
-                    self.view_num,
-                    pre_prepare_source,
-                    prepare_source,
-                    commit_digest,
-                    self.transport.clone(),
-                )),
-                commit_session: tokio::spawn(commit_session(
-                    self.replica.clone(),
-                    self.view_num,
-                    op_num,
-                    async move { Ok(digest.await?) },
-                    commit_source,
-                    self.transport.clone(),
-                )),
-                pre_prepare_event: Some(pre_prepare_event),
-                prepare_event,
-                commit_event,
-            }
-        })
-    }
-
-    fn handle_reply_ready(&mut self, client_id: u32, reply: Reply) {
-        match self
-            .client_entires
-            .insert(client_id, ClientEntry::Committed(reply.clone()))
-        {
-            Some(ClientEntry::Committing(request_num)) if request_num == reply.request_num => self
-                .replica
-                .send_to_client(client_id, reply, self.reply_transport.clone()),
-            Some(ClientEntry::Committing(request_num)) if request_num > reply.request_num => {}
-            _ => unreachable!(),
-        }
     }
 
     fn on_requests(&mut self, requests: Vec<Request>) {
@@ -571,6 +510,64 @@ where
                 commit_event,
             },
         );
+    }
+
+    fn handle_pre_prepare(
+        &mut self,
+        pre_prepare: Message<PrePrepare>,
+        requests: Vec<Request>,
+    ) -> crate::Result<()> {
+        self.get_or_insert_quorum_state(pre_prepare.op_num)
+            .pre_prepare_event
+            .as_ref()
+            .expect("PrePrepare EventSender exists")
+            .send((pre_prepare, requests))
+    }
+
+    fn handle_prepare(&mut self, prepare: Message<Prepare>) -> crate::Result<()> {
+        self.get_or_insert_quorum_state(prepare.op_num)
+            .prepare_event
+            .send(prepare)
+    }
+
+    fn handle_commit(&mut self, commit: Message<Commit>) -> crate::Result<()> {
+        self.get_or_insert_quorum_state(commit.op_num)
+            .commit_event
+            .send(commit)
+    }
+
+    fn get_or_insert_quorum_state(&mut self, op_num: u32) -> &mut QuorumState {
+        assert!(!self.replica.is_primary(self.view_num));
+        self.quorum_states.entry(op_num).or_insert_with(|| {
+            let (pre_prepare_event, pre_prepare_source) = event_channel();
+            let (prepare_event, prepare_source) = event_channel();
+            let (commit_event, commit_source) = event_channel();
+            let (commit_digest, digest) = promise_channel();
+            // a more "standard" way may be only spawn commit session after prepared. the approach
+            // here can handle Commit-Prepare (and even Commit-PrePrepare) reordering without
+            // retransmission, by leveraging event channels as implicit buffers
+            QuorumState {
+                prepare_session: tokio::spawn(backup_prepare_session(
+                    self.replica.clone(),
+                    self.view_num,
+                    pre_prepare_source,
+                    prepare_source,
+                    commit_digest,
+                    self.transport.clone(),
+                )),
+                commit_session: tokio::spawn(commit_session(
+                    self.replica.clone(),
+                    self.view_num,
+                    op_num,
+                    async move { Ok(digest.await?) },
+                    commit_source,
+                    self.transport.clone(),
+                )),
+                pre_prepare_event: Some(pre_prepare_event),
+                prepare_event,
+                commit_event,
+            }
+        })
     }
 
     fn on_prepare_quorum(&mut self, entry: LogEntry) {
@@ -621,6 +618,19 @@ where
 
         if self.replica.is_primary(self.view_num) {
             self.batch_state.as_ref().unwrap().permits.add_permits(1)
+        }
+    }
+
+    fn on_reply_ready(&mut self, client_id: u32, reply: Reply) {
+        match self
+            .client_entires
+            .insert(client_id, ClientEntry::Committed(reply.clone()))
+        {
+            Some(ClientEntry::Committing(request_num)) if request_num == reply.request_num => self
+                .replica
+                .send_to_client(client_id, reply, self.reply_transport.clone()),
+            Some(ClientEntry::Committing(request_num)) if request_num > reply.request_num => {}
+            _ => unreachable!(),
         }
     }
 }
