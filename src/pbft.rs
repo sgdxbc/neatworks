@@ -481,6 +481,13 @@ where
 
     fn on_requests(&mut self, requests: Vec<Request>) {
         assert!(self.replica.is_primary(self.view_num));
+        let Some(batch_state) = self.batch_state.as_mut() else {
+            unreachable!()
+        };
+        let (event, source) = event_channel();
+        batch_state.event = event;
+        batch_state.session = tokio::spawn(batch_session(batch_state.permits.clone(), source));
+
         self.propose_op += 1;
         let (prepare_event, prepare_source) = event_channel();
         let (commit_event, commit_source) = event_channel();
@@ -590,6 +597,7 @@ where
 
     fn on_commit_quorum(&mut self, commits: Quorum<Commit>) {
         self.commit_op += 1;
+        self.quorum_states.remove(&self.commit_op).unwrap();
         let entry = self
             .log_entries
             .get_mut(&self.commit_op)

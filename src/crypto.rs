@@ -46,9 +46,9 @@ impl BorshDeserialize for Packet {
     }
 }
 
-/// In-memory representation of `M`, equiped with a signature that may or may 
+/// In-memory representation of `M`, equiped with a signature that may or may
 /// not be verified.
-/// 
+///
 /// If `inner` is mutated, the `inner_bytes` and `signature` may get out of sync
 /// with it, so keep `Message<M>` read only.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -94,6 +94,13 @@ impl Packet {
 pub struct Signer(secp256k1::SecretKey);
 
 impl Signer {
+    pub fn new_hardcoded(index: usize) -> Self {
+        let mut key = [0xcc; 32];
+        let index = index.to_be_bytes();
+        key[..index.len()].copy_from_slice(&index);
+        Self(secp256k1::SecretKey::from_slice(&key).unwrap())
+    }
+
     pub fn serialize_sign<M>(&self, message: M) -> crate::Result<Message<M>>
     where
         M: BorshSerialize,
@@ -122,6 +129,15 @@ impl Signer {
 pub struct Verifier(secp256k1::PublicKey);
 
 impl Verifier {
+    pub fn new_hardcoded(index: usize) -> Self {
+        thread_local! {
+            static SECP: secp256k1::Secp256k1<secp256k1::SignOnly> =
+                secp256k1::Secp256k1::signing_only();
+        }
+        let Signer(key) = Signer::new_hardcoded(index);
+        Self(SECP.with(|secp| key.public_key(secp)))
+    }
+
     pub fn verify<M>(&self, message: &mut Message<M>) -> crate::Result<()> {
         if message.verified {
             return Ok(());

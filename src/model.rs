@@ -33,6 +33,9 @@ impl<M> EventSender<M> {
     }
 }
 
+/// A thin wrapper around Tokio's unbounded MPSC channel.
+/// 
+/// Wrapped to integrate with `crate::Result`.
 pub fn event_channel<M>() -> (EventSender<M>, EventSource<M>) {
     let channel = tokio::sync::mpsc::unbounded_channel();
     (EventSender(channel.0), EventSource(channel.1))

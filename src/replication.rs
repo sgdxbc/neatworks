@@ -1,5 +1,5 @@
-//! Common structures and methods for implementing replication protocols. Kind 
-//! of like `Configuration` and `Replica` and `Client` base classes in 
+//! Common structures and methods for implementing replication protocols. Kind
+//! of like `Configuration` and `Replica` and `Client` base classes in
 //! SpecPaxos.
 
 use std::{
@@ -8,7 +8,7 @@ use std::{
     time::Duration,
 };
 
-use borsh::{BorshDeserialize, BorshSerialize};
+use tokio::time::{timeout_at, Instant};
 
 use crate::{
     crypto::{Signer, Verifier},
@@ -47,10 +47,19 @@ impl AddrBook {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SocketAddrBook {
     replica_addrs: HashMap<u8, SocketAddr>,
     client_addrs: BTreeMap<u32, SocketAddr>,
+}
+
+impl From<replication_control_messages::AddrBook> for AddrBook {
+    fn from(value: replication_control_messages::AddrBook) -> Self {
+        Self::Socket(SocketAddrBook {
+            replica_addrs: value.replica_addrs,
+            client_addrs: value.client_addrs,
+        })
+    }
 }
 
 impl SocketAddrBook {
@@ -109,6 +118,46 @@ impl UntypedAddrBook {
 }
 
 #[derive(Debug)]
+pub struct Client {
+    pub id: u32,
+    pub num_replica: usize,
+    pub num_faulty: usize,
+    pub spawner: BackgroundSpawner,
+    pub addr_book: AddrBook,
+    pub retry_interval: Duration,
+}
+
+impl Client {
+    pub fn primary_replica(&self, view_num: u32) -> u8 {
+        (view_num as usize % self.num_replica) as _
+    }
+}
+
+#[async_trait::async_trait]
+pub trait Workload {
+    async fn session(&mut self, invoke_handle: SubmitHandle<Vec<u8>, Vec<u8>>)
+        -> crate::Result<()>;
+}
+
+pub async fn close_loop_session(
+    mut workload: impl Workload,
+    duration: Duration,
+    invoke_handle: SubmitHandle<Vec<u8>, Vec<u8>>,
+) -> crate::Result<Vec<Duration>> {
+    let deadline = Instant::now() + duration;
+    let mut latencies = Vec::new();
+    let mut start;
+    while let Ok(result) = {
+        start = Instant::now();
+        timeout_at(deadline, workload.session(invoke_handle.clone())).await
+    } {
+        result?;
+        latencies.push(start.elapsed());
+    }
+    Ok(latencies)
+}
+
+#[derive(Debug)]
 pub struct Replica {
     pub id: u8,
     pub num_replica: usize,
@@ -158,18 +207,5 @@ impl Replica {
     }
 }
 
-#[derive(Debug)]
-pub struct Client {
-    pub id: u32,
-    pub num_replica: usize,
-    pub num_faulty: usize,
-    pub spawner: BackgroundSpawner,
-    pub addr_book: AddrBook,
-    pub retry_interval: Duration,
-}
-
-impl Client {
-    pub fn primary_replica(&self, view_num: u32) -> u8 {
-        (view_num as usize % self.num_replica) as _
-    }
-}
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+pub struct Stop;

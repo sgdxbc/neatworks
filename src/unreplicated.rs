@@ -6,6 +6,7 @@ use tokio::time::{timeout_at, Instant};
 
 use crate::{
     model::{EventSender, EventSource, SubmitSource, Transport},
+    replication::Stop,
     Client, Replica,
 };
 
@@ -67,6 +68,13 @@ async fn request_session(
 pub enum ReplicaEvent {
     Message(Request),
     ReplyReady(u32, Reply),
+    Stop,
+}
+
+impl From<Stop> for ReplicaEvent {
+    fn from(Stop: Stop) -> Self {
+        Self::Stop
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -89,6 +97,7 @@ pub async fn replica_session(
             .await
             .expect("self-holding sender keeps source opening")
         {
+            ReplicaEvent::Stop => break Ok(()),
             ReplicaEvent::Message(request) => match entries.get(&request.client_id) {
                 Some(ClientEntry::Submitted(request_num))
                     if *request_num >= request.request_num =>
