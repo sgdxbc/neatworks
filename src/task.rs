@@ -63,14 +63,14 @@ impl BackgroundMonitor {
     pub async fn wait(&mut self) -> crate::Result<()> {
         match self.err_receiver.recv().await {
             Some(err) => {
-                self.cancel();
+                self.token.cancel();
                 Err(err)
             }
             None => Ok(()),
         }
     }
 
-    pub fn cancel(&self) {
-        self.token.cancel()
-    }
+    // pub fn cancel(&self) {
+    //     self.token.cancel()
+    // }
 }

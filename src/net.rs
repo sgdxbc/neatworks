@@ -9,7 +9,14 @@ use crate::model::{Addr, EventSender, Message, Transport};
 pub struct UdpSocket(Arc<tokio::net::UdpSocket>);
 
 impl UdpSocket {
-    pub async fn listen_loop<M, E>(&self, event_sender: EventSender<E>) -> crate::Result<()>
+    pub async fn bind(addr: Addr) -> crate::Result<Self> {
+        let Addr::Socket(addr) = addr else {
+            crate::bail!("unsupported {addr:?}")
+        };
+        Ok(Self(Arc::new(tokio::net::UdpSocket::bind(addr).await?)))
+    }
+
+    pub async fn listen_session<M, E>(&self, event_sender: EventSender<E>) -> crate::Result<()>
     where
         M: BorshDeserialize + Into<E> + Send + 'static,
     {

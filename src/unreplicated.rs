@@ -51,7 +51,7 @@ async fn request_session(
 ) -> crate::Result<Vec<u8>> {
     loop {
         transport
-            .send_to(client.addr_book.replica_addr(0), request.clone())
+            .send_to(client.addr_book.replica_addr(0)?, request.clone())
             .await?;
         let deadline = Instant::now() + client.retry_interval;
         while let Ok(reply) = timeout_at(deadline, source.next()).await {

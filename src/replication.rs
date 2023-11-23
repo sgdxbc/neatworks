@@ -2,12 +2,9 @@
 //! of like `Configuration` and `Replica` and `Client` base classes in
 //! SpecPaxos.
 
-use std::{
-    collections::{BTreeMap, HashMap},
-    net::SocketAddr,
-    time::Duration,
-};
+use std::{collections::HashMap, future::Future, net::SocketAddr, time::Duration};
 
+use derive_more::From;
 use tokio::time::{timeout_at, Instant};
 
 use crate::{
@@ -16,17 +13,17 @@ use crate::{
     task::BackgroundSpawner,
 };
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, From)]
 pub enum AddrBook {
     Socket(SocketAddrBook),
     Untyped(UntypedAddrBook),
 }
 
 impl AddrBook {
-    pub fn replica_addr(&self, id: u8) -> Addr {
+    pub fn replica_addr(&self, id: u8) -> crate::Result<Addr> {
         match self {
             Self::Socket(book) => book.replica_addr(id),
-            Self::Untyped(book) => book.replica_addr(id),
+            Self::Untyped(book) => Ok(book.replica_addr(id)),
         }
     }
 
@@ -39,10 +36,10 @@ impl AddrBook {
         .into_iter()
     }
 
-    pub fn client_addr(&self, id: u32) -> Addr {
+    pub fn client_addr(&self, id: u32) -> crate::Result<Addr> {
         match self {
             Self::Socket(book) => book.client_addr(id),
-            Self::Untyped(book) => book.client_addr(id),
+            Self::Untyped(book) => Ok(book.client_addr(id)),
         }
     }
 }
@@ -50,32 +47,32 @@ impl AddrBook {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SocketAddrBook {
     replica_addrs: HashMap<u8, SocketAddr>,
-    client_addrs: BTreeMap<u32, SocketAddr>,
+    client_addrs: HashMap<u32, SocketAddr>,
 }
 
-impl From<replication_control_messages::AddrBook> for AddrBook {
+impl From<replication_control_messages::AddrBook> for SocketAddrBook {
     fn from(value: replication_control_messages::AddrBook) -> Self {
-        Self::Socket(SocketAddrBook {
+        Self {
             replica_addrs: value.replica_addrs,
             client_addrs: value.client_addrs,
-        })
+        }
     }
 }
 
 impl SocketAddrBook {
-    fn replica_addr(&self, id: u8) -> Addr {
-        Addr::Socket(
+    fn replica_addr(&self, id: u8) -> crate::Result<Addr> {
+        Ok(Addr::Socket(
             *self
                 .replica_addrs
                 .get(&id)
-                .unwrap_or_else(|| panic!("replica {id} address not found")),
-        )
+                .ok_or(crate::err!("replica {id} address not found"))?,
+        ))
     }
 
-    pub fn remove_addr(&mut self, id: u8) -> SocketAddr {
+    pub fn remove_addr(&mut self, id: u8) -> crate::Result<SocketAddr> {
         self.replica_addrs
             .remove(&id)
-            .unwrap_or_else(|| panic!("replica {id} address not found"))
+            .ok_or(crate::err!("replica {id} address not found"))
     }
 
     // TODO cache addresses and remove lifetime bound?
@@ -83,15 +80,13 @@ impl SocketAddrBook {
         self.replica_addrs.values().copied().map(Addr::Socket)
     }
 
-    fn client_addr(&self, id: u32) -> Addr {
-        Addr::Socket(
+    fn client_addr(&self, id: u32) -> crate::Result<Addr> {
+        Ok(Addr::Socket(
             *self
                 .client_addrs
-                .range(id..)
-                .next()
-                .unwrap_or_else(|| panic!("unexpected empty client address"))
-                .1,
-        )
+                .get(&id)
+                .ok_or(crate::err!("client {id} address not found"))?,
+        ))
     }
 }
 
@@ -122,7 +117,6 @@ pub struct Client {
     pub id: u32,
     pub num_replica: usize,
     pub num_faulty: usize,
-    pub spawner: BackgroundSpawner,
     pub addr_book: AddrBook,
     pub retry_interval: Duration,
 }
@@ -137,6 +131,20 @@ impl Client {
 pub trait Workload {
     async fn session(&mut self, invoke_handle: SubmitHandle<Vec<u8>, Vec<u8>>)
         -> crate::Result<()>;
+}
+
+#[async_trait::async_trait]
+impl<F, R> Workload for F
+where
+    F: FnMut(SubmitHandle<Vec<u8>, Vec<u8>>) -> R + Send,
+    R: Future<Output = crate::Result<()>> + Send,
+{
+    async fn session(
+        &mut self,
+        invoke_handle: SubmitHandle<Vec<u8>, Vec<u8>>,
+    ) -> crate::Result<()> {
+        self(invoke_handle).await
+    }
 }
 
 pub async fn close_loop_session(
@@ -183,9 +191,12 @@ impl Replica {
         M: Message,
     {
         assert_ne!(id, self.id);
+        // a better design may be failing outside of spawning
+        // currently doing this because it should make little difference and not bother to modify
+        // exist protocol code
         let destination = self.addr_book.replica_addr(id);
         self.spawner
-            .spawn(async move { transport.send_to(destination, message).await });
+            .spawn(async move { transport.send_to(destination?, message).await });
     }
 
     pub fn send_to_all_replica<M>(&self, message: M, transport: impl Transport<M>)
@@ -203,7 +214,7 @@ impl Replica {
     {
         let destination = self.addr_book.client_addr(id);
         self.spawner
-            .spawn(async move { transport.send_to(destination, message).await });
+            .spawn(async move { transport.send_to(destination?, message).await });
     }
 }
 

@@ -104,7 +104,7 @@ async fn request_session(
 
     transport
         .send_to(
-            client.addr_book.replica_addr(*primary_replica),
+            client.addr_book.replica_addr(*primary_replica)?,
             request.clone(),
         )
         .await?;

@@ -6,6 +6,10 @@ edition = "2021"
 [workspace]
 members = [".", "tools/*"]
 
+[profile.artifact]
+inherits = "release"
+incremental = true
+
 [dependencies]
 anyhow = { version = "1.0.75", features = ["backtrace"] }
 async-trait = "0.1.74"
