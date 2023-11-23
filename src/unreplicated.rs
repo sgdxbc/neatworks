@@ -38,7 +38,7 @@ pub async fn client_session(
             request_num,
             op,
         };
-        result.resolve(request_session(&client, request, &mut source, &transport).await?)?
+        result.resolve(request_session(&client, request, &mut source, &transport).await?)
     }
     Ok(())
 }

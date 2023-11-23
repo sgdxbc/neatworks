@@ -8,9 +8,7 @@ where
     U: Default,
 {
     while let Some((_, result)) = source.option_next().await {
-        result
-            .resolve(Default::default())
-            .map_err(|_| crate::err!("unexpected reply channel closing"))?
+        result.resolve(Default::default())
     }
     Ok(())
 }

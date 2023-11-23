@@ -88,7 +88,7 @@ pub async fn client_session(
                 &transport,
             )
             .await?,
-        )?
+        )
     }
     Ok(())
 }
@@ -232,7 +232,7 @@ async fn prepare_session(
             prepares.insert(prepare.replica_id, prepare);
         }
     }
-    commit_digest.resolve(pre_prepare.digest)?;
+    commit_digest.resolve(pre_prepare.digest);
     Ok(LogEntry {
         requests,
         pre_prepare,

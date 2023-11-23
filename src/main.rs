@@ -42,7 +42,10 @@ async fn main() -> helloween::Result<()> {
     let signal_task = tokio::spawn({
         let shutdown = shutdown.clone();
         async move {
-            let result = tokio::signal::ctrl_c().await;
+            let result = tokio::select! {
+                result = tokio::signal::ctrl_c() => result,
+                result = shutdown.cancelled() => Ok(result),
+            };
             shutdown.cancel();
             result
         }
@@ -81,6 +84,7 @@ async fn run_client_internal(state: Arc<AppState>, client: messages::Client) {
             Ok(socket) => socket,
             Err(err) => {
                 eprintln!("{err}");
+                eprint!("{}", err.backtrace());
                 state.shutdown.cancel();
                 return;
             }
@@ -125,6 +129,7 @@ async fn run_client_internal(state: Arc<AppState>, client: messages::Client) {
     });
     if let Err(err) = monitor.wait().await {
         eprintln!("{err}");
+        eprint!("{}", err.backtrace());
         shutdown.cancel()
     }
 }
@@ -160,6 +165,7 @@ async fn run_replica_internal(
             Ok(socket) => socket,
             Err(err) => {
                 eprintln!("{err}");
+                eprint!("{}", err.backtrace());
                 shutdown.cancel();
                 return;
             }
@@ -209,6 +215,7 @@ async fn run_replica_internal(
     .await
     {
         eprintln!("{err}");
+        eprint!("{}", err.backtrace());
         shutdown.cancel()
     }
 }

@@ -2,7 +2,7 @@
 //! of like `Configuration` and `Replica` and `Client` base classes in
 //! SpecPaxos.
 
-use std::{collections::HashMap, future::Future, net::SocketAddr, time::Duration};
+use std::{collections::HashMap, net::SocketAddr, time::Duration};
 
 use derive_more::From;
 use tokio::time::{timeout_at, Instant};
@@ -131,20 +131,6 @@ impl Client {
 pub trait Workload {
     async fn session(&mut self, invoke_handle: SubmitHandle<Vec<u8>, Vec<u8>>)
         -> crate::Result<()>;
-}
-
-#[async_trait::async_trait]
-impl<F, R> Workload for F
-where
-    F: FnMut(SubmitHandle<Vec<u8>, Vec<u8>>) -> R + Send,
-    R: Future<Output = crate::Result<()>> + Send,
-{
-    async fn session(
-        &mut self,
-        invoke_handle: SubmitHandle<Vec<u8>, Vec<u8>>,
-    ) -> crate::Result<()> {
-        self(invoke_handle).await
-    }
 }
 
 pub async fn close_loop_session(

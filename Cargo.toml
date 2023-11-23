@@ -9,6 +9,7 @@ members = [".", "tools/*"]
 [profile.artifact]
 inherits = "release"
 incremental = true
+debug = true
 
 [dependencies]
 anyhow = { version = "1.0.75", features = ["backtrace"] }

@@ -34,7 +34,7 @@ impl<M> EventSender<M> {
 }
 
 /// A thin wrapper around Tokio's unbounded MPSC channel.
-/// 
+///
 /// Wrapped to integrate with `crate::Result`.
 pub fn event_channel<M>() -> (EventSender<M>, EventSource<M>) {
     let channel = tokio::sync::mpsc::unbounded_channel();
@@ -52,10 +52,10 @@ pub fn promise_channel<T>() -> (PromiseSender<T>, PromiseSource<T>) {
 }
 
 impl<T> PromiseSender<T> {
-    pub fn resolve(self, value: T) -> crate::Result<()> {
-        self.0
-            .send(value)
-            .map_err(|_| crate::err!("unexpected return channel closing"))
+    pub fn resolve(self, value: T) {
+        if self.0.send(value).is_err() {
+            eprintln!("return channel closed before submitted task finishes")
+        }
     }
 }
 
