@@ -19,7 +19,7 @@ use helloween::{
     task::BackgroundMonitor,
     unreplicated, Client, Replica,
 };
-use replication_control_messages as control;
+use replication_control_messages as messages;
 use tokio::{sync::oneshot, task::JoinSet};
 use tokio_util::sync::CancellationToken;
 
@@ -64,11 +64,11 @@ struct AppState {
 
 type App = State<Arc<AppState>>;
 
-async fn run_client(State(state): App, Json(payload): Json<control::Client>) {
+async fn run_client(State(state): App, Json(payload): Json<messages::Client>) {
     tokio::spawn(run_client_internal(state, payload));
 }
 
-async fn run_client_internal(state: Arc<AppState>, client: control::Client) {
+async fn run_client_internal(state: Arc<AppState>, client: messages::Client) {
     let mut monitor = BackgroundMonitor::default();
     let spawner = monitor.spawner();
     let addr_book = AddrBook::Socket(client.addr_book.into());
@@ -133,7 +133,7 @@ async fn take_client_result(State(state): App) -> impl IntoResponse {
     Json(state.client_result.lock().unwrap().take())
 }
 
-async fn run_replica(State(state): App, Json(payload): Json<control::Replica>) {
+async fn run_replica(State(state): App, Json(payload): Json<messages::Replica>) {
     let (reset_sender, reset_receiver) = oneshot::channel();
     *state.reset.lock().unwrap() = Some(reset_sender);
     tokio::spawn(run_replica_internal(
@@ -144,7 +144,7 @@ async fn run_replica(State(state): App, Json(payload): Json<control::Replica>) {
 }
 
 async fn run_replica_internal(
-    replica: control::Replica,
+    replica: messages::Replica,
     reset: oneshot::Receiver<()>,
     shutdown: CancellationToken,
 ) {

@@ -14,7 +14,7 @@ pub struct Replica {
     pub addr_book: AddrBook,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub struct AddrBook {
     pub replica_addrs: HashMap<u8, SocketAddr>,
     pub client_addrs: HashMap<u32, SocketAddr>,
