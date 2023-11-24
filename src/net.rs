@@ -2,6 +2,7 @@ use std::sync::Arc;
 
 use borsh::{BorshDeserialize, BorshSerialize};
 use derive_more::From;
+use tokio_util::sync::CancellationToken;
 
 use crate::model::{Addr, EventSender, Message, Transport};
 
@@ -16,14 +17,21 @@ impl UdpSocket {
         Ok(Self(Arc::new(tokio::net::UdpSocket::bind(addr).await?)))
     }
 
-    pub async fn listen_session<M, E>(&self, event_sender: EventSender<E>) -> crate::Result<()>
+    pub async fn listen_session<M, E>(
+        &self,
+        event: EventSender<E>,
+        stop: CancellationToken,
+    ) -> crate::Result<()>
     where
         M: BorshDeserialize + Into<E> + Send + 'static,
     {
         let mut buf = vec![0; 65536];
         loop {
-            let (len, _remote) = self.0.recv_from(&mut buf).await?;
-            event_sender.send(borsh::from_slice::<M>(&buf[..len])?.into())?
+            let (len, _remote) = tokio::select! {
+                recv_from = self.0.recv_from(&mut buf) => recv_from?,
+                () = stop.cancelled() => break Ok(()),
+            };
+            event.send(borsh::from_slice::<M>(&buf[..len])?.into())?
         }
     }
 }
@@ -68,6 +76,24 @@ where
         };
         let buf = borsh::to_vec(&message.into())?;
         self.0.send_to(&buf, destination).await?;
+        Ok(())
+    }
+
+    async fn send_to_all(
+        &self,
+        destinations: impl Iterator<Item = Addr> + Send,
+        message: M,
+    ) -> crate::Result<()>
+    where
+        M: Message,
+    {
+        let buf = borsh::to_vec(&message.into())?;
+        for destination in destinations {
+            let Addr::Socket(destination) = destination else {
+                crate::bail!("unsupported destination kind {destination:?}")
+            };
+            self.0.send_to(&buf, destination).await?;
+        }
         Ok(())
     }
 }

@@ -17,7 +17,7 @@ async fn main() -> anyhow::Result<()> {
                 .build()?,
         )
         .unwrap();
-    let result = benchmark_session().await?;
+    let result = benchmark_session(messages::Protocol::Unreplicated).await?;
     println!("{result:?}");
     Ok(())
 }
@@ -77,7 +77,7 @@ async fn replica_session(
     Ok(())
 }
 
-async fn benchmark_session() -> anyhow::Result<(f32, Duration)> {
+async fn benchmark_session(protocol: messages::Protocol) -> anyhow::Result<(f32, Duration)> {
     let mut addr_book = AddrBook::default();
     addr_book
         .client_addrs
@@ -85,18 +85,36 @@ async fn benchmark_session() -> anyhow::Result<(f32, Duration)> {
     addr_book
         .replica_addrs
         .insert(0, ([127, 0, 0, 1], 30000).into());
+    let num_faulty = match protocol {
+        messages::Protocol::Unreplicated => 0,
+        _ => 1,
+    };
+    let num_replica = 3 * num_faulty + 1;
+
     let mut replica_sessions = JoinSet::new();
     let shutdown = CancellationToken::new();
-    let config = messages::Replica {
-        id: 0,
-        addr_book: addr_book.clone(),
-    };
-    let url = "http://127.0.0.1:10000".into();
-    replica_sessions.spawn(replica_session(config, url, shutdown.clone()));
+    let urls = ["http://127.0.0.1:10000"];
+    for (i, url) in urls.into_iter().enumerate() {
+        let config = messages::Replica {
+            id: i as _,
+            addr_book: addr_book.clone(),
+            num_replica,
+            num_faulty,
+            protocol,
+        };
+        replica_sessions.spawn(replica_session(
+            config.clone(),
+            url.into(),
+            shutdown.clone(),
+        ));
+    }
     let mut client_sessions = JoinSet::new();
     let config = messages::Client {
         id_range: 0..1,
         addr_book,
+        num_replica,
+        num_faulty,
+        protocol,
     };
     let url = "http://127.0.0.1:10001".into();
     client_sessions.spawn(client_session(config, url));
@@ -106,6 +124,7 @@ async fn benchmark_session() -> anyhow::Result<(f32, Duration)> {
         result = client_sessions.join_next() => result,
         result = replica_sessions.join_next() => Err(result.unwrap().unwrap_err())?,
     } {
+        // println!("{client_result:?}");
         let (throughput, latency) = client_result??;
         throughput_sum += throughput;
         latency_sum += latency * throughput as _;
@@ -114,5 +133,5 @@ async fn benchmark_session() -> anyhow::Result<(f32, Duration)> {
     while let Some(replica_result) = replica_sessions.join_next().await {
         replica_result??
     }
-    Ok((throughput_sum, latency_sum / throughput_sum as _))
+    Ok((throughput_sum, latency_sum / throughput_sum.ceil() as _))
 }

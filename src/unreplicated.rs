@@ -128,7 +128,7 @@ pub async fn replica_session(
                             result: app.submit(request.op).await?,
                         };
                         event.send(ReplicaEvent::ReplyReady(request.client_id, reply))
-                    })
+                    });
                 }
             },
             ReplicaEvent::ReplyReady(client_id, reply) => {

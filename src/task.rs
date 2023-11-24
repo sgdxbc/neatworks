@@ -1,36 +1,51 @@
 use std::future::Future;
 
-use tokio::sync::mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender};
-use tokio_util::sync::CancellationToken;
+use tokio::{
+    sync::mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender},
+    task::JoinHandle,
+};
 
+/// Safer alternative to raw `tokio::spawn`.
+///
+/// It can be used to spawn the set of *background tasks* which effectively
+/// "abort the program if anything goes wrong", that is
+/// * They are possible to go wrong (so unwrapping does not fit)
+/// * Besides going wrong they only have trivial result (either `()` or `!`), so
+///   not bother to join them manually that for propogating the error
+/// * If they goes wrong there's no way or no meaning to recover
+///
+/// Candidates for background tasks includes socket listener, tasks with forever
+/// loop blocking on `SubmitSource`, etc. It is advised to spawn these tasks
+/// with monitoring their status instead of just detaching them, to make the
+/// system more predicatable. The model here is similar to spawn the tasks into
+/// a `JoinSet`, just this can be shared acorss multiple users and waiter.
+///
+/// Background tasks should bring their own shutdown policy. It is expected that
+/// all background tasks shut themselves down under certain circumstance, so we
+/// can confirm that they actually work well during lifetime. Remember to drop
+/// unused `BackgroundSpawner`, or it may block monitor's `wait` call.
 #[derive(Debug, Clone)]
 pub struct BackgroundSpawner {
     err_sender: UnboundedSender<crate::Error>,
-    token: CancellationToken,
 }
 
 impl BackgroundSpawner {
-    pub fn spawn(&self, task: impl Future<Output = crate::Result<()>> + Send + 'static) {
+    pub fn spawn(
+        &self,
+        task: impl Future<Output = crate::Result<()>> + Send + 'static,
+    ) -> JoinHandle<()> {
         let err_sender = self.err_sender.clone();
-        let token = self.token.clone();
-        let mut task = tokio::spawn(task);
+        let task = tokio::spawn(task);
         tokio::spawn(async move {
-            let result = tokio::select! {
-                result = &mut task => result,
-                () = token.cancelled() => {
-                    task.abort();
-                    task.await
-                }
-            };
-            let err = match result {
-                Err(err) if !err.is_cancelled() => err.into(),
+            let err = match task.await {
+                Err(err) => err.into(),
                 Ok(Err(err)) => err,
                 _ => return,
             };
             err_sender
                 .send(err)
                 .expect("background monitor not shutdown")
-        });
+        })
     }
 }
 
@@ -38,7 +53,6 @@ impl BackgroundSpawner {
 pub struct BackgroundMonitor {
     err_sender: UnboundedSender<crate::Error>,
     err_receiver: UnboundedReceiver<crate::Error>,
-    token: CancellationToken,
 }
 
 impl Default for BackgroundMonitor {
@@ -47,7 +61,6 @@ impl Default for BackgroundMonitor {
         Self {
             err_sender,
             err_receiver,
-            token: CancellationToken::new(),
         }
     }
 }
@@ -56,21 +69,22 @@ impl BackgroundMonitor {
     pub fn spawner(&self) -> BackgroundSpawner {
         BackgroundSpawner {
             err_sender: self.err_sender.clone(),
-            token: self.token.clone(),
         }
     }
 
-    pub async fn wait(&mut self) -> crate::Result<()> {
+    pub async fn wait(mut self) -> crate::Result<()> {
+        drop(self.err_sender);
         match self.err_receiver.recv().await {
-            Some(err) => {
-                self.token.cancel();
-                Err(err)
-            }
+            Some(err) => Err(err),
             None => Ok(()),
         }
     }
 
-    // pub fn cancel(&self) {
-    //     self.token.cancel()
-    // }
+    pub async fn wait_task<T>(&mut self, task: impl Future<Output = T>) -> crate::Result<T> {
+        tokio::select! {
+            result = task => Ok(result),
+            err = self.err_receiver.recv() =>
+                Err(err.expect("error channel opens")),
+        }
+    }
 }

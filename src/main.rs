@@ -13,18 +13,19 @@ use axum::{
 use helloween::{
     app::{null_session, NullWorkload},
     crypto::{Signer, Verifier},
-    model::{event_channel, Addr},
+    model::{event_channel, promise_channel, Addr, PromiseSender, PromiseSource},
     net::UdpSocket,
     replication::{close_loop_session, AddrBook, SocketAddrBook, Stop},
     task::BackgroundMonitor,
     unreplicated, Client, Replica,
 };
 use replication_control_messages as messages;
-use tokio::{sync::oneshot, task::JoinSet};
+use tokio::{task::JoinSet, time::timeout};
 use tokio_util::sync::CancellationToken;
 
 #[tokio::main]
 async fn main() -> helloween::Result<()> {
+    std::env::set_var("RUST_BACKTRACE", "1");
     let port = std::env::args()
         .nth(1)
         .as_deref()
@@ -61,7 +62,7 @@ async fn main() -> helloween::Result<()> {
 #[derive(Default)]
 struct AppState {
     client_result: Mutex<Option<(f32, Duration)>>,
-    reset: Mutex<Option<oneshot::Sender<()>>>,
+    promise_reset: Mutex<Option<PromiseSender<PromiseSender<()>>>>,
     shutdown: CancellationToken,
 }
 
@@ -71,12 +72,15 @@ async fn run_client(State(state): App, Json(payload): Json<messages::Client>) {
     tokio::spawn(run_client_internal(state, payload));
 }
 
-async fn run_client_internal(state: Arc<AppState>, client: messages::Client) {
+async fn run_client_internal(state: Arc<AppState>, config: messages::Client) {
     let mut monitor = BackgroundMonitor::default();
     let spawner = monitor.spawner();
-    let addr_book = AddrBook::Socket(client.addr_book.into());
-    let mut sessions = JoinSet::new();
-    for id in client.id_range {
+    let stop = CancellationToken::new();
+
+    let addr_book = AddrBook::Socket(config.addr_book.into());
+    let mut close_loop_sessions = JoinSet::new();
+    let mut client_sessions = Vec::new();
+    for id in config.id_range {
         let (event, source) = event_channel();
         let (invoke_event, invoke_source) = event_channel();
 
@@ -91,47 +95,70 @@ async fn run_client_internal(state: Arc<AppState>, client: messages::Client) {
         };
         spawner.spawn({
             let socket = socket.clone();
-            async move { socket.listen_session::<unreplicated::Reply, _>(event).await }
+            let stop = stop.clone();
+            async move {
+                socket
+                    .listen_session::<unreplicated::Reply, _>(event, stop)
+                    .await
+            }
         });
 
         let client = Client {
             id,
-            num_replica: 1,
-            num_faulty: 0,
+            num_replica: config.num_replica,
+            num_faulty: config.num_faulty,
             addr_book: addr_book.clone(),
             retry_interval: Duration::from_millis(100),
         };
-        spawner.spawn(unreplicated::client_session(
+        client_sessions.push(spawner.spawn(unreplicated::client_session(
             client.into(),
             invoke_source,
             source,
             socket.into_transport::<unreplicated::Request>(),
-        ));
+        )));
 
-        sessions.spawn(close_loop_session(
+        close_loop_sessions.spawn(close_loop_session(
             NullWorkload,
             Duration::from_secs(10),
             invoke_event,
         ));
     }
+    drop(spawner);
 
-    let shutdown = state.shutdown.clone();
-    spawner.spawn(async move {
+    let join_task = tokio::spawn(async move {
         let mut latencies = Vec::new();
-        while let Some(result) = sessions.join_next().await {
+        while let Some(result) = close_loop_sessions.join_next().await {
             latencies.extend(result??)
         }
-        *state.client_result.lock().unwrap() = Some((
+        Ok::<_, helloween::Error>((
             latencies.len() as f32 / 10.,
             latencies.iter().sum::<Duration>() / latencies.len() as _,
-        ));
-        Ok(())
+        ))
     });
-    if let Err(err) = monitor.wait().await {
-        eprintln!("{err}");
-        eprint!("{}", err.backtrace());
-        shutdown.cancel()
+    let result = match async {
+        let result = timeout(
+            Duration::from_secs(10) + Duration::from_millis(100),
+            monitor.wait_task(join_task),
+        )
+        .await????;
+        for client_session in client_sessions {
+            monitor.wait_task(client_session).await??
+        }
+        stop.cancel();
+        timeout(Duration::from_millis(100), monitor.wait()).await??;
+        Ok::<_, helloween::Error>(result)
     }
+    .await
+    {
+        Ok(result) => result,
+        Err(err) => {
+            eprintln!("{err}");
+            eprint!("{}", err.backtrace());
+            state.shutdown.cancel();
+            return;
+        }
+    };
+    *state.client_result.lock().unwrap() = Some(result);
 }
 
 async fn take_client_result(State(state): App) -> impl IntoResponse {
@@ -139,43 +166,42 @@ async fn take_client_result(State(state): App) -> impl IntoResponse {
 }
 
 async fn run_replica(State(state): App, Json(payload): Json<messages::Replica>) {
-    let (reset_sender, reset_receiver) = oneshot::channel();
-    *state.reset.lock().unwrap() = Some(reset_sender);
-    tokio::spawn(run_replica_internal(
-        payload,
-        reset_receiver,
-        state.shutdown.clone(),
-    ));
+    let (promise_reset, reset) = promise_channel();
+    *state.promise_reset.lock().unwrap() = Some(promise_reset);
+    tokio::spawn(run_replica_internal(payload, reset, state.shutdown.clone()));
 }
 
 async fn run_replica_internal(
-    replica: messages::Replica,
-    reset: oneshot::Receiver<()>,
+    config: messages::Replica,
+    reset: PromiseSource<PromiseSender<()>>,
     shutdown: CancellationToken,
 ) {
     let mut monitor = BackgroundMonitor::default();
     let spawner = monitor.spawner();
     let (event, source) = event_channel();
+    let stop = CancellationToken::new();
 
-    let mut addr_book = SocketAddrBook::from(replica.addr_book);
-    let socket =
-        match async { UdpSocket::bind(Addr::Socket(addr_book.remove_addr(replica.id)?)).await }
-            .await
-        {
-            Ok(socket) => socket,
-            Err(err) => {
-                eprintln!("{err}");
-                eprint!("{}", err.backtrace());
-                shutdown.cancel();
-                return;
-            }
-        };
+    let mut addr_book = SocketAddrBook::from(config.addr_book);
+    let socket = match async {
+        UdpSocket::bind(Addr::Socket(addr_book.remove_addr(config.id)?)).await
+    }
+    .await
+    {
+        Ok(socket) => socket,
+        Err(err) => {
+            eprintln!("{err}");
+            eprint!("{}", err.backtrace());
+            shutdown.cancel();
+            return;
+        }
+    };
     spawner.spawn({
         let socket = socket.clone();
         let event = event.clone();
+        let stop = stop.clone();
         async move {
             socket
-                .listen_session::<unreplicated::Request, _>(event)
+                .listen_session::<unreplicated::Request, _>(event, stop)
                 .await
         }
     });
@@ -188,12 +214,12 @@ async fn run_replica_internal(
         verifiers.insert(i, Verifier::new_hardcoded(i as _));
     }
     let replica = Replica {
-        id: replica.id,
-        num_replica: 1,
-        num_faulty: 0,
+        id: config.id,
+        num_replica: config.num_replica,
+        num_faulty: config.num_faulty,
         app: app_event,
         spawner: spawner.clone(),
-        signer: Signer::new_hardcoded(replica.id as _),
+        signer: Signer::new_hardcoded(config.id as _),
         verifiers,
         addr_book: AddrBook::Socket(addr_book),
     };
@@ -203,14 +229,15 @@ async fn run_replica_internal(
         source,
         socket.into_transport::<unreplicated::Reply>(),
     ));
+    drop(spawner);
 
     if let Err(err) = async {
-        tokio::select! {
-            result = reset => result.unwrap(),
-            err = monitor.wait() => Err(err.unwrap_err())?,
-        }
+        let promise_ack = monitor.wait_task(reset).await??;
+        stop.cancel();
         event.send(Stop.into())?;
-        monitor.wait().await
+        monitor.wait().await?;
+        promise_ack.resolve(());
+        Ok::<_, helloween::Error>(())
     }
     .await
     {
@@ -221,12 +248,13 @@ async fn run_replica_internal(
 }
 
 async fn reset_replica(State(state): App) {
+    let (promise_ack, ack) = promise_channel();
     state
-        .reset
+        .promise_reset
         .lock()
         .unwrap()
         .take()
         .unwrap()
-        .send(())
-        .unwrap()
+        .resolve(promise_ack);
+    ack.await.unwrap()
 }
