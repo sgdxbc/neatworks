@@ -12,11 +12,14 @@ use axum::{
 };
 use helloween::{
     app::{null_session, NullWorkload},
+    channel::{PromiseSender, PromiseSource},
     crypto::{Signer, Verifier},
-    model::{event_channel, promise_channel, Addr, PromiseSender, PromiseSource},
+    event_channel,
     net::UdpSocket,
+    promise_channel,
     replication::{close_loop_session, AddrBook, SocketAddrBook, Stop},
     task::BackgroundMonitor,
+    transport::Addr,
     unreplicated, Client, Replica,
 };
 use replication_control_messages as messages;

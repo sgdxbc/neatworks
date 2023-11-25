@@ -4,7 +4,11 @@ use borsh::{BorshDeserialize, BorshSerialize};
 use derive_more::From;
 use tokio_util::sync::CancellationToken;
 
-use crate::model::{Addr, EventSender, Message, Transport};
+use crate::{
+    channel::EventSender,
+    transport::{Addr, Message},
+    Transport,
+};
 
 #[derive(Debug, Clone, From)]
 pub struct UdpSocket(Arc<tokio::net::UdpSocket>);

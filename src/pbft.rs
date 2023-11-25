@@ -9,12 +9,9 @@ use tokio::{
 };
 
 use crate::{
+    channel::{EventSender, EventSource, PromiseSender, SubmitSource},
     crypto::{digest, Digest, Message, Packet},
-    model::{
-        event_channel, promise_channel, EventSender, EventSource, PromiseSender, SubmitSource,
-        Transport,
-    },
-    Client, Replica,
+    event_channel, promise_channel, Client, Replica, Transport,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq, BorshSerialize, BorshDeserialize)]

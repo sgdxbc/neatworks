@@ -1,5 +1,5 @@
 use crate::{
-    model::{SubmitHandle, SubmitSource},
+    channel::{SubmitHandle, SubmitSource},
     replication::Workload,
 };
 

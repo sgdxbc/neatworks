@@ -5,9 +5,9 @@ use derive_more::From;
 use tokio::time::{timeout_at, Instant};
 
 use crate::{
-    model::{EventSender, EventSource, SubmitSource, Transport},
+    channel::{EventSender, EventSource, SubmitSource},
     replication::Stop,
-    Client, Replica,
+    Client, Replica, Transport,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, BorshSerialize, BorshDeserialize)]

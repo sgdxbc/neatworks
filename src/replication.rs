@@ -8,9 +8,11 @@ use derive_more::From;
 use tokio::time::{timeout_at, Instant};
 
 use crate::{
+    channel::SubmitHandle,
     crypto::{Signer, Verifier},
-    model::{Addr, Message, SubmitHandle, Transport},
     task::BackgroundSpawner,
+    transport::{Addr, Message},
+    Transport,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq, From)]
