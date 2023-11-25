@@ -1,3 +1,31 @@
+//! A transportation abstraction that supports multiplexing.
+//! 
+//! The implementations of `Transport<M>` e.g. `UdpTransport<N>` may take
+//! another type parameter `N`, and implement `Transport<M>` whenever
+//! `M: Into<N>`. This would allow sessions to be multiplexed together by
+//! sharing the same transportation, thus share the same network channel.
+//!
+//! For example, a session A may keep session B and session C as its
+//! sub-sessions, and define its on-wire message format as:
+//!
+//! ```rust
+//! #[derive(From)]
+//! enum AMessage {
+//!     B(BMessage),
+//!     C(CMessage),
+//!     // other variants that produced by A itself
+//! }
+//! ```
+//!
+//! Then a `UdpTransport<AMessage>` implements both `Transport<BMessage>` and
+//! `Transport<CMessage>` by wrapping them into `AMessage` before transmitting,
+//! so session A can shared the transport with the sub-sessions. By working with
+//! `impl Transport<BMessage>` and `impl Transport<CMessage>`, sub-sessions are
+//! unmodified for the fact that all sessions are sending messages in the form
+//! of `AMessage`. Notice that the incoming messages for the sub-sessions will
+//! end up in session A's event loop, so session A should relay the messages
+//! into sub-sessions event loop manually, act as a middleware if necessary.
+
 pub trait Message
 where
     Self: Clone + Send + Sync + 'static,

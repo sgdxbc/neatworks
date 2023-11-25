@@ -65,7 +65,7 @@ async fn main() -> helloween::Result<()> {
 #[derive(Default)]
 struct AppState {
     client_result: Mutex<Option<(f32, Duration)>>,
-    promise_reset: Mutex<Option<PromiseSender<PromiseSender<()>>>>,
+    reset: Mutex<Option<PromiseSender<PromiseSender<()>>>>,
     shutdown: CancellationToken,
 }
 
@@ -157,14 +157,18 @@ async fn take_client_result(State(state): App) -> impl IntoResponse {
 }
 
 async fn run_replica(State(state): App, Json(payload): Json<messages::Replica>) {
-    let (promise_reset, reset) = promise_channel();
-    *state.promise_reset.lock().unwrap() = Some(promise_reset);
-    tokio::spawn(run_replica_internal(payload, reset, state.shutdown.clone()));
+    let (reset, reset_promise) = promise_channel();
+    *state.reset.lock().unwrap() = Some(reset);
+    tokio::spawn(run_replica_internal(
+        payload,
+        reset_promise,
+        state.shutdown.clone(),
+    ));
 }
 
 async fn run_replica_internal(
     config: messages::Replica,
-    reset: PromiseSource<PromiseSender<()>>,
+    reset_promise: PromiseSource<PromiseSender<()>>,
     shutdown: CancellationToken,
 ) {
     if let Err(err) = async {
@@ -211,12 +215,12 @@ async fn run_replica_internal(
         ));
         drop(spawner);
 
-        let promise_ack = monitor.wait_task(reset).await??;
+        let ack = monitor.wait_task(reset_promise).await??;
         stop_replica.cancel();
         replica_task.await?;
         stop_listen.cancel();
         timeout(Duration::from_millis(100), monitor.wait()).await??;
-        promise_ack.resolve(());
+        ack.resolve(());
         Ok::<_, helloween::Error>(())
     }
     .await
@@ -228,13 +232,7 @@ async fn run_replica_internal(
 }
 
 async fn reset_replica(State(state): App) {
-    let (promise_ack, ack) = promise_channel();
-    state
-        .promise_reset
-        .lock()
-        .unwrap()
-        .take()
-        .unwrap()
-        .resolve(promise_ack);
-    ack.await.unwrap()
+    let (ack, ack_promise) = promise_channel();
+    state.reset.lock().unwrap().take().unwrap().resolve(ack);
+    ack_promise.await.unwrap()
 }

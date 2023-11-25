@@ -302,11 +302,11 @@ async fn commit_session(
     replica: Arc<Replica>,
     view_num: u32,
     op_num: u32,
-    digest: impl Future<Output = crate::Result<Digest>>,
+    digest_promise: impl Future<Output = crate::Result<Digest>>,
     mut source: EventSource<Message<Commit>>,
     transport: impl Transport<ToReplica>,
 ) -> crate::Result<Quorum<Commit>> {
-    let digest = digest.await?;
+    let digest = digest_promise.await?;
     let mut commits = HashMap::new();
     let commit = Commit {
         view_num,
@@ -478,9 +478,7 @@ where
 
     fn on_requests(&mut self, requests: Vec<Request>) {
         assert!(self.replica.is_primary(self.view_num));
-        let Some(batch_state) = self.batch_state.as_mut() else {
-            unreachable!()
-        };
+        let batch_state = self.batch_state.as_mut().unwrap();
         let (event, source) = event_channel();
         batch_state.event = event;
         batch_state.session = tokio::spawn(batch_session(batch_state.permits.clone(), source));
@@ -488,7 +486,7 @@ where
         self.propose_op += 1;
         let (prepare_event, prepare_source) = event_channel();
         let (commit_event, commit_source) = event_channel();
-        let (commit_digest, digest) = promise_channel();
+        let (digest, digest_promise) = promise_channel();
         self.quorum_states.insert(
             self.propose_op,
             QuorumState {
@@ -498,14 +496,14 @@ where
                     self.propose_op,
                     requests,
                     prepare_source,
-                    commit_digest,
+                    digest,
                     self.transport.clone(),
                 )),
                 commit_session: tokio::spawn(commit_session(
                     self.replica.clone(),
                     self.view_num,
                     self.propose_op,
-                    async move { Ok(digest.await?) },
+                    async move { Ok(digest_promise.await?) },
                     commit_source,
                     self.transport.clone(),
                 )),

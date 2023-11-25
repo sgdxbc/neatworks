@@ -63,10 +63,22 @@ pub type SubmitHandle<T, U> = EventSender<(T, PromiseSender<U>)>;
 
 impl<T, U> SubmitHandle<T, U> {
     pub async fn submit(&self, op: T) -> crate::Result<U> {
-        let chan = promise_channel();
-        self.send((op, chan.0))?;
-        Ok(chan.1.await?)
+        let (result, promise) = promise_channel();
+        self.send((op, result))?;
+        Ok(promise.await?)
     }
 }
 
 pub type SubmitSource<T, U> = EventSource<(T, PromiseSender<U>)>;
+
+pub type SubscribeHandle<T, U> = EventSender<(T, EventSender<U>)>;
+
+impl<T, U> SubscribeHandle<T, U> {
+    pub fn subscribe(&self, op: T) -> crate::Result<EventSource<U>> {
+        let (event, source) = event_channel();
+        self.send((op, event))?;
+        Ok(source)
+    }
+}
+
+pub type SubscribeSource<T, U> = EventSource<(T, EventSender<U>)>;
