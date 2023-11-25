@@ -23,7 +23,7 @@ impl UdpSocket {
 
     pub async fn listen_session<M, E>(
         &self,
-        event: EventSender<E>,
+        event: EventSender<(Addr, E)>,
         stop: CancellationToken,
     ) -> crate::Result<()>
     where
@@ -31,11 +31,14 @@ impl UdpSocket {
     {
         let mut buf = vec![0; 65536];
         loop {
-            let (len, _remote) = tokio::select! {
+            let (len, remote) = tokio::select! {
                 recv_from = self.0.recv_from(&mut buf) => recv_from?,
                 () = stop.cancelled() => break Ok(()),
             };
-            event.send(borsh::from_slice::<M>(&buf[..len])?.into())?
+            event.send((
+                Addr::Socket(remote),
+                borsh::from_slice::<M>(&buf[..len])?.into(),
+            ))?
         }
     }
 }

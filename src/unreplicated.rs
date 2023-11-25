@@ -3,10 +3,12 @@ use std::{collections::HashMap, sync::Arc};
 use borsh::{BorshDeserialize, BorshSerialize};
 use derive_more::From;
 use tokio::time::{timeout_at, Instant};
+use tokio_util::sync::CancellationToken;
 
 use crate::{
-    channel::{EventSender, EventSource, SubmitSource},
-    replication::Stop,
+    channel::{EventSource, SubmitSource},
+    event_channel,
+    transport::Addr,
     Client, Replica, Transport,
 };
 
@@ -26,7 +28,7 @@ pub struct Reply {
 pub async fn client_session(
     client: Arc<Client>,
     mut invoke_source: SubmitSource<Vec<u8>, Vec<u8>>,
-    mut source: EventSource<Reply>,
+    mut source: EventSource<(Addr, Reply)>,
     transport: impl Transport<Request>,
 ) -> crate::Result<()> {
     let mut request_num = 0;
@@ -46,7 +48,7 @@ pub async fn client_session(
 async fn request_session(
     client: &Client,
     request: Request,
-    source: &mut EventSource<Reply>,
+    source: &mut EventSource<(Addr, Reply)>,
     transport: &impl Transport<Request>,
 ) -> crate::Result<Vec<u8>> {
     loop {
@@ -55,7 +57,7 @@ async fn request_session(
             .await?;
         let deadline = Instant::now() + client.retry_interval;
         while let Ok(reply) = timeout_at(deadline, source.next()).await {
-            let reply = reply?;
+            let (_remote, reply) = reply?;
             assert!(reply.request_num <= request.request_num);
             if reply.request_num == request.request_num {
                 return Ok(reply.result);
@@ -66,15 +68,7 @@ async fn request_session(
 
 #[derive(Debug, From)]
 pub enum ReplicaEvent {
-    Message(Request),
     ReplyReady(u32, Reply),
-    Stop,
-}
-
-impl From<Stop> for ReplicaEvent {
-    fn from(Stop: Stop) -> Self {
-        Self::Stop
-    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -85,20 +79,26 @@ enum ClientEntry {
 
 pub async fn replica_session(
     replica: Arc<Replica>,
-    event: EventSender<ReplicaEvent>,
-    mut source: EventSource<ReplicaEvent>,
+    stop: CancellationToken,
+    mut listen_source: EventSource<(Addr, Request)>,
     reply_transport: impl Transport<Reply>,
 ) -> crate::Result<()> {
+    let (event, mut source) = event_channel();
     let mut entries = HashMap::new();
 
     loop {
-        match source
-            .next()
-            .await
-            .expect("self-holding sender keeps source opening")
-        {
-            ReplicaEvent::Stop => break Ok(()),
-            ReplicaEvent::Message(request) => match entries.get(&request.client_id) {
+        enum Select {
+            Listen((Addr, Request)),
+            Event(ReplicaEvent),
+            Stop,
+        }
+        match tokio::select! {
+            listen = listen_source.next() => Select::Listen(listen?),
+            event = source.next() => Select::Event(event.expect("event channel not closing")),
+            () = stop.cancelled() => Select::Stop
+        } {
+            Select::Stop => break Ok(()),
+            Select::Listen((_, request)) => match entries.get(&request.client_id) {
                 Some(ClientEntry::Submitted(request_num))
                     if *request_num >= request.request_num =>
                 {
@@ -131,7 +131,7 @@ pub async fn replica_session(
                     });
                 }
             },
-            ReplicaEvent::ReplyReady(client_id, reply) => {
+            Select::Event(ReplicaEvent::ReplyReady(client_id, reply)) => {
                 let evicted = entries.insert(client_id, ClientEntry::Replied(reply.clone()));
                 assert_eq!(evicted, Some(ClientEntry::Submitted(reply.request_num)));
                 replica.send_to_client(client_id, reply, reply_transport.clone());

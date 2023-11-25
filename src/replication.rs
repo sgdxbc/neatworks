@@ -205,6 +205,3 @@ impl Replica {
             .spawn(async move { transport.send_to(destination?, message).await });
     }
 }
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
-pub struct Stop;
