@@ -206,18 +206,14 @@ async fn run_replica_internal(
             verifiers,
             addr_book: AddrBook::Socket(addr_book),
         };
-        let stop_replica = CancellationToken::new();
-        let replica_task = spawner.spawn(unreplicated::replica_session(
+        spawner.spawn(unreplicated::replica_session(
             replica.into(),
-            stop_replica.clone(),
             listen_source,
             socket.into_transport::<unreplicated::Reply>(),
         ));
         drop(spawner);
 
         let ack = monitor.wait_task(reset_promise).await??;
-        stop_replica.cancel();
-        replica_task.await?;
         stop_listen.cancel();
         timeout(Duration::from_millis(100), monitor.wait()).await??;
         ack.resolve(());

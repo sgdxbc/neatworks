@@ -1,9 +1,7 @@
 use std::{collections::HashMap, sync::Arc};
 
 use borsh::{BorshDeserialize, BorshSerialize};
-use derive_more::From;
 use tokio::time::{timeout_at, Instant};
-use tokio_util::sync::CancellationToken;
 
 use crate::{
     channel::{EventSource, SubmitSource},
@@ -66,11 +64,6 @@ async fn request_session(
     }
 }
 
-#[derive(Debug, From)]
-pub enum ReplicaEvent {
-    ReplyReady(u32, Reply),
-}
-
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum ClientEntry {
     Submitted(u32),
@@ -79,7 +72,6 @@ enum ClientEntry {
 
 pub async fn replica_session(
     replica: Arc<Replica>,
-    stop: CancellationToken,
     mut listen_source: EventSource<(Addr, Request)>,
     reply_transport: impl Transport<Reply>,
 ) -> crate::Result<()> {
@@ -88,17 +80,15 @@ pub async fn replica_session(
 
     loop {
         enum Select {
-            Listen((Addr, Request)),
-            Event(ReplicaEvent),
-            Stop,
+            Listen(Option<(Addr, Request)>),
+            Reply((u32, Reply)),
         }
         match tokio::select! {
-            listen = listen_source.next() => Select::Listen(listen?),
-            event = source.next() => Select::Event(event.expect("event channel not closing")),
-            () = stop.cancelled() => Select::Stop
+            listen = listen_source.option_next() => Select::Listen(listen),
+            event = source.next() => Select::Reply(event.expect("event channel not closing")),
         } {
-            Select::Stop => break Ok(()),
-            Select::Listen((_, request)) => match entries.get(&request.client_id) {
+            Select::Listen(None) => break Ok(()),
+            Select::Listen(Some((_, request))) => match entries.get(&request.client_id) {
                 Some(ClientEntry::Submitted(request_num))
                     if *request_num >= request.request_num =>
                 {
@@ -127,11 +117,11 @@ pub async fn replica_session(
                             request_num: request.request_num,
                             result: app.submit(request.op).await?,
                         };
-                        event.send(ReplicaEvent::ReplyReady(request.client_id, reply))
+                        event.send((request.client_id, reply))
                     });
                 }
             },
-            Select::Event(ReplicaEvent::ReplyReady(client_id, reply)) => {
+            Select::Reply((client_id, reply)) => {
                 let evicted = entries.insert(client_id, ClientEntry::Replied(reply.clone()));
                 assert_eq!(evicted, Some(ClientEntry::Submitted(reply.request_num)));
                 replica.send_to_client(client_id, reply, reply_transport.clone());

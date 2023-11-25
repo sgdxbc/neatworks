@@ -1,7 +1,6 @@
-use std::{collections::HashMap, future::Future, iter::repeat, sync::Arc};
+use std::{collections::HashMap, error::Error, fmt::Display, iter::repeat, sync::Arc};
 
 use borsh::{BorshDeserialize, BorshSerialize};
-use derive_more::From;
 use tokio::{
     sync::Semaphore,
     task::JoinHandle,
@@ -9,9 +8,11 @@ use tokio::{
 };
 
 use crate::{
-    channel::{EventSender, EventSource, PromiseSender, SubmitSource},
+    channel::{EventSender, EventSource, PromiseSender, PromiseSource, SubmitSource},
     crypto::{digest, Digest, Message, Packet},
-    event_channel, promise_channel, Client, Replica, Transport,
+    event_channel, promise_channel,
+    transport::Addr,
+    Client, Replica, Transport,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
@@ -129,30 +130,38 @@ async fn request_session(
     }
 }
 
-#[derive(Debug, From)]
-pub enum ReplicaEvent {
-    Message(ToReplica),
-    ReplyReady(u32, Reply),
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Hash)]
+struct ListenClosed;
+
+impl Display for ListenClosed {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{self:?}")
+    }
 }
+
+impl Error for ListenClosed {}
 
 pub async fn replica_session(
     replica: Arc<Replica>,
-    event: EventSender<ReplicaEvent>,
-    mut source: EventSource<ReplicaEvent>,
+    mut listen_source: EventSource<(Addr, ToReplica)>,
     transport: impl Transport<ToReplica>,
     reply_transport: impl Transport<Reply>,
 ) -> crate::Result<()> {
     for view_num in 0.. {
-        ViewState::new(
+        match ViewState::new(
             replica.clone(),
             view_num,
-            event.clone(),
-            &mut source,
+            &mut listen_source,
             transport.clone(),
             reply_transport.clone(),
         )
         .session()
-        .await?;
+        .await
+        {
+            Ok(_) => {}
+            Err(err) if err.downcast_ref::<ListenClosed>().is_some() => break,
+            err => err?,
+        }
         // TODO view change
     }
     Ok(())
@@ -302,7 +311,7 @@ async fn commit_session(
     replica: Arc<Replica>,
     view_num: u32,
     op_num: u32,
-    digest_promise: impl Future<Output = crate::Result<Digest>>,
+    digest_promise: PromiseSource<Digest>,
     mut source: EventSource<Message<Commit>>,
     transport: impl Transport<ToReplica>,
 ) -> crate::Result<Quorum<Commit>> {
@@ -336,11 +345,12 @@ async fn commit_session(
 struct ViewState<'a, T, U> {
     replica: Arc<Replica>,
     view_num: u32,
-    event: EventSender<ReplicaEvent>,
-    source: &'a mut EventSource<ReplicaEvent>,
+    listen_source: &'a mut EventSource<(Addr, ToReplica)>,
     transport: T,
     reply_transport: U,
 
+    reply_event: EventSender<(u32, Reply)>,
+    reply_source: EventSource<(u32, Reply)>,
     client_entires: HashMap<u32, ClientEntry>,
     batch_state: Option<BatchState>,
     propose_op: u32,
@@ -380,11 +390,11 @@ where
     fn new(
         replica: Arc<Replica>,
         view_num: u32,
-        event: EventSender<ReplicaEvent>,
-        source: &'a mut EventSource<ReplicaEvent>,
+        listen_source: &'a mut EventSource<(Addr, ToReplica)>,
         transport: T,
         reply_transport: U,
     ) -> Self {
+        let (reply_event, reply_source) = event_channel();
         let batch_state = if replica.is_primary(view_num) {
             let (event, source) = event_channel();
             let permits = Arc::new(Semaphore::new(1));
@@ -399,10 +409,11 @@ where
         Self {
             replica,
             view_num,
-            event,
-            source,
+            listen_source,
             transport,
             reply_transport,
+            reply_event,
+            reply_source,
             client_entires: Default::default(),
             batch_state,
             propose_op: Default::default(),
@@ -429,30 +440,29 @@ where
                 }
             }
             tokio::select! {
-                event = self.source.next() => self.on_event(event?)?,
+                listen = self.listen_source.next() => self.on_message(listen.map_err(|_| ListenClosed)?.1)?,
                 requests = &mut self.batch_state.as_mut().unwrap().session,
                     if self.batch_state.is_some() => self.on_requests(requests??),
                 entry = prepare_session.unwrap(),
                     if prepare_session.is_some() => self.on_prepare_quorum(entry??),
                 commits = commit_session.unwrap(),
                     if commit_session.is_some() => self.on_commit_quorum(commits??),
+                reply = self.reply_source.next() => {
+                    let (client_id, reply) = reply?;
+                    self.on_reply(client_id, reply)
+                }
             }
         }
     }
 
-    fn on_event(&mut self, event: ReplicaEvent) -> crate::Result<()> {
-        match event {
-            ReplicaEvent::Message(ToReplica::Request(request)) => self.handle_request(request)?,
-            ReplicaEvent::Message(ToReplica::PrePrepare(pre_prepare, requests)) => {
+    fn on_message(&mut self, message: ToReplica) -> crate::Result<()> {
+        match message {
+            ToReplica::Request(request) => self.handle_request(request)?,
+            ToReplica::PrePrepare(pre_prepare, requests) => {
                 self.handle_pre_prepare(pre_prepare.deserialize()?, requests)?
             }
-            ReplicaEvent::Message(ToReplica::Prepare(prepare)) => {
-                self.handle_prepare(prepare.deserialize()?)?
-            }
-            ReplicaEvent::Message(ToReplica::Commit(commit)) => {
-                self.handle_commit(commit.deserialize()?)?
-            }
-            ReplicaEvent::ReplyReady(client_id, reply) => self.on_reply_ready(client_id, reply),
+            ToReplica::Prepare(prepare) => self.handle_prepare(prepare.deserialize()?)?,
+            ToReplica::Commit(commit) => self.handle_commit(commit.deserialize()?)?,
         }
         Ok(())
     }
@@ -503,7 +513,7 @@ where
                     self.replica.clone(),
                     self.view_num,
                     self.propose_op,
-                    async move { Ok(digest_promise.await?) },
+                    digest_promise,
                     commit_source,
                     self.transport.clone(),
                 )),
@@ -544,7 +554,7 @@ where
             let (pre_prepare_event, pre_prepare_source) = event_channel();
             let (prepare_event, prepare_source) = event_channel();
             let (commit_event, commit_source) = event_channel();
-            let (commit_digest, digest) = promise_channel();
+            let (digest, digest_promise) = promise_channel();
             // a more "standard" way may be only spawn commit session after prepared. the approach
             // here can handle Commit-Prepare (and even Commit-PrePrepare) reordering without
             // retransmission, by leveraging event channels as implicit buffers
@@ -554,14 +564,14 @@ where
                     self.view_num,
                     pre_prepare_source,
                     prepare_source,
-                    commit_digest,
+                    digest,
                     self.transport.clone(),
                 )),
                 commit_session: tokio::spawn(commit_session(
                     self.replica.clone(),
                     self.view_num,
                     op_num,
-                    async move { Ok(digest.await?) },
+                    digest_promise,
                     commit_source,
                     self.transport.clone(),
                 )),
@@ -606,7 +616,7 @@ where
             .iter()
             .cloned()
             .zip(repeat(self.replica.app.clone()))
-            .zip(repeat(self.event.clone()))
+            .zip(repeat(self.reply_event.clone()))
         {
             self.replica.spawner.spawn(async move {
                 let reply = Reply {
@@ -615,7 +625,7 @@ where
                     replica_id,
                     view_num,
                 };
-                event.send(ReplicaEvent::ReplyReady(request.client_id, reply))
+                event.send((request.client_id, reply))
             });
         }
 
@@ -624,7 +634,7 @@ where
         }
     }
 
-    fn on_reply_ready(&mut self, client_id: u32, reply: Reply) {
+    fn on_reply(&mut self, client_id: u32, reply: Reply) {
         match self
             .client_entires
             .insert(client_id, ClientEntry::Committed(reply.clone()))
