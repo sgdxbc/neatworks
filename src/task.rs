@@ -12,13 +12,17 @@ use tokio::{
 /// * They are possible to go wrong (so unwrapping does not fit)
 /// * Besides going wrong they only have trivial result (either `()` or `!`), so
 ///   not bother to join them manually that for propogating the error
-/// * If they goes wrong there's no way or no meaning to recover
+/// * If they goes wrong there's no way or no meaning to recover, that is, we
+///   would not bother to repair the system after any of them goes wrong, 
+///   instead we just want to make sure the capture the error reliably and fail
+///   the whole system as a whole
 ///
-/// Candidates for background tasks includes socket listener, tasks with forever
-/// loop blocking on `SubmitSource`, etc. It is advised to spawn these tasks
-/// with monitoring their status instead of just detaching them, to make the
-/// system more predicatable. The model here is similar to spawn the tasks into
-/// a `JoinSet`, just this can be shared acorss multiple users and waiter.
+/// Candidates for background tasks includes socket listener, message sender, 
+/// tasks with forever loop blocking on `SubmitSource`, etc. It is advised to 
+/// spawn these tasks with monitoring their status instead of just detaching 
+/// them, to make the system more predicatable. The model here is similar to 
+/// spawn the tasks into a `JoinSet`, just this can be shared acorss multiple 
+/// users and waiter.
 ///
 /// Background tasks should bring their own shutdown policy. It is expected that
 /// all background tasks shut themselves down under certain circumstance, so we

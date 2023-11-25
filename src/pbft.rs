@@ -3,7 +3,7 @@ use std::{collections::HashMap, error::Error, fmt::Display, iter::repeat, sync::
 use borsh::{BorshDeserialize, BorshSerialize};
 use tokio::{
     sync::Semaphore,
-    task::JoinHandle,
+    task::{JoinHandle, JoinSet},
     time::{timeout_at, Instant},
 };
 
@@ -349,15 +349,14 @@ struct ViewState<'a, T, U> {
     transport: T,
     reply_transport: U,
 
-    reply_event: EventSender<(u32, Reply)>,
-    reply_source: EventSource<(u32, Reply)>,
     client_entires: HashMap<u32, ClientEntry>,
-    batch_state: Option<BatchState>,
+    batch_handle: Option<BatchHandle>,
     propose_op: u32,
     prepare_op: u32,
     commit_op: u32,
-    quorum_states: HashMap<u32, QuorumState>,
+    quorum_handles: HashMap<u32, QuorumHandle>,
     log_entries: HashMap<u32, LogEntry>,
+    reply_sessions: JoinSet<crate::Result<(u32, Reply)>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -367,14 +366,14 @@ enum ClientEntry {
 }
 
 #[derive(Debug)]
-struct BatchState {
+struct BatchHandle {
     event: EventSender<Request>,
     session: JoinHandle<crate::Result<Vec<Request>>>,
     permits: Arc<Semaphore>,
 }
 
 #[derive(Debug)]
-struct QuorumState {
+struct QuorumHandle {
     prepare_session: JoinHandle<crate::Result<LogEntry>>,
     commit_session: JoinHandle<crate::Result<Quorum<Commit>>>,
     pre_prepare_event: Option<EventSender<(Message<PrePrepare>, Vec<Request>)>>,
@@ -394,11 +393,10 @@ where
         transport: T,
         reply_transport: U,
     ) -> Self {
-        let (reply_event, reply_source) = event_channel();
-        let batch_state = if replica.is_primary(view_num) {
+        let batch_handle = if replica.is_primary(view_num) {
             let (event, source) = event_channel();
             let permits = Arc::new(Semaphore::new(1));
-            Some(BatchState {
+            Some(BatchHandle {
                 event,
                 session: tokio::spawn(batch_session(permits.clone(), source)),
                 permits,
@@ -412,15 +410,14 @@ where
             listen_source,
             transport,
             reply_transport,
-            reply_event,
-            reply_source,
             client_entires: Default::default(),
-            batch_state,
+            batch_handle,
             propose_op: Default::default(),
             prepare_op: Default::default(),
             commit_op: Default::default(),
-            quorum_states: Default::default(),
+            quorum_handles: Default::default(),
             log_entries: Default::default(),
+            reply_sessions: Default::default(),
         }
     }
 
@@ -431,7 +428,7 @@ where
             // maybe get solved by `get_many_mut` if it get stablized
             let mut prepare_session = None;
             let mut commit_session = None;
-            for (&op, state) in &mut self.quorum_states {
+            for (&op, state) in &mut self.quorum_handles {
                 if op == self.prepare_op + 1 {
                     prepare_session = Some(&mut state.prepare_session)
                 }
@@ -441,14 +438,16 @@ where
             }
             tokio::select! {
                 listen = self.listen_source.next() => self.on_message(listen.map_err(|_| ListenClosed)?.1)?,
-                requests = &mut self.batch_state.as_mut().unwrap().session,
-                    if self.batch_state.is_some() => self.on_requests(requests??),
+                requests = &mut self.batch_handle.as_mut().unwrap().session,
+                    if self.batch_handle.is_some() => self.on_requests(requests??),
                 entry = prepare_session.unwrap(),
                     if prepare_session.is_some() => self.on_prepare_quorum(entry??),
                 commits = commit_session.unwrap(),
                     if commit_session.is_some() => self.on_commit_quorum(commits??),
-                reply = self.reply_source.next() => {
-                    let (client_id, reply) = reply?;
+                reply = self.reply_sessions.join_next(),
+                    if !self.reply_sessions.is_empty() =>
+                {
+                    let (client_id, reply) = reply.unwrap()??;
                     self.on_reply(client_id, reply)
                 }
             }
@@ -479,7 +478,7 @@ where
                         request.client_id,
                         ClientEntry::Committing(request.request_num),
                     );
-                    self.batch_state.as_ref().unwrap().event.send(request)?
+                    self.batch_handle.as_ref().unwrap().event.send(request)?
                 }
             }
         }
@@ -488,7 +487,7 @@ where
 
     fn on_requests(&mut self, requests: Vec<Request>) {
         assert!(self.replica.is_primary(self.view_num));
-        let batch_state = self.batch_state.as_mut().unwrap();
+        let batch_state = self.batch_handle.as_mut().unwrap();
         let (event, source) = event_channel();
         batch_state.event = event;
         batch_state.session = tokio::spawn(batch_session(batch_state.permits.clone(), source));
@@ -497,9 +496,9 @@ where
         let (prepare_event, prepare_source) = event_channel();
         let (commit_event, commit_source) = event_channel();
         let (digest, digest_promise) = promise_channel();
-        self.quorum_states.insert(
+        self.quorum_handles.insert(
             self.propose_op,
-            QuorumState {
+            QuorumHandle {
                 prepare_session: tokio::spawn(primary_prepare_session(
                     self.replica.clone(),
                     self.view_num,
@@ -548,9 +547,9 @@ where
             .send(commit)
     }
 
-    fn get_or_insert_quorum_state(&mut self, op_num: u32) -> &mut QuorumState {
+    fn get_or_insert_quorum_state(&mut self, op_num: u32) -> &mut QuorumHandle {
         assert!(!self.replica.is_primary(self.view_num));
-        self.quorum_states.entry(op_num).or_insert_with(|| {
+        self.quorum_handles.entry(op_num).or_insert_with(|| {
             let (pre_prepare_event, pre_prepare_source) = event_channel();
             let (prepare_event, prepare_source) = event_channel();
             let (commit_event, commit_source) = event_channel();
@@ -558,7 +557,7 @@ where
             // a more "standard" way may be only spawn commit session after prepared. the approach
             // here can handle Commit-Prepare (and even Commit-PrePrepare) reordering without
             // retransmission, by leveraging event channels as implicit buffers
-            QuorumState {
+            QuorumHandle {
                 prepare_session: tokio::spawn(backup_prepare_session(
                     self.replica.clone(),
                     self.view_num,
@@ -602,7 +601,7 @@ where
 
     fn on_commit_quorum(&mut self, commits: Quorum<Commit>) {
         self.commit_op += 1;
-        self.quorum_states.remove(&self.commit_op).unwrap();
+        self.quorum_handles.remove(&self.commit_op).unwrap();
         let entry = self
             .log_entries
             .get_mut(&self.commit_op)
@@ -611,26 +610,25 @@ where
 
         let replica_id = self.replica.id;
         let view_num = self.view_num;
-        for ((request, app), event) in entry
+        for (request, app) in entry
             .requests
             .iter()
             .cloned()
             .zip(repeat(self.replica.app.clone()))
-            .zip(repeat(self.reply_event.clone()))
         {
-            self.replica.spawner.spawn(async move {
+            self.reply_sessions.spawn(async move {
                 let reply = Reply {
                     request_num: request.request_num,
                     result: app.submit(request.op).await?,
                     replica_id,
                     view_num,
                 };
-                event.send((request.client_id, reply))
+                Ok((request.client_id, reply))
             });
         }
 
         if self.replica.is_primary(self.view_num) {
-            self.batch_state.as_ref().unwrap().permits.add_permits(1)
+            self.batch_handle.as_ref().unwrap().permits.add_permits(1)
         }
     }
 

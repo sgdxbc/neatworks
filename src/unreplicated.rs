@@ -1,11 +1,13 @@
 use std::{collections::HashMap, sync::Arc};
 
 use borsh::{BorshDeserialize, BorshSerialize};
-use tokio::time::{timeout_at, Instant};
+use tokio::{
+    task::JoinSet,
+    time::{timeout_at, Instant},
+};
 
 use crate::{
     channel::{EventSource, SubmitSource},
-    event_channel,
     transport::Addr,
     Client, Replica, Transport,
 };
@@ -75,8 +77,8 @@ pub async fn replica_session(
     mut listen_source: EventSource<(Addr, Request)>,
     reply_transport: impl Transport<Reply>,
 ) -> crate::Result<()> {
-    let (event, mut source) = event_channel();
     let mut entries = HashMap::new();
+    let mut reply_sessions = JoinSet::new();
 
     loop {
         enum Select {
@@ -85,7 +87,8 @@ pub async fn replica_session(
         }
         match tokio::select! {
             listen = listen_source.option_next() => Select::Listen(listen),
-            event = source.next() => Select::Reply(event.expect("event channel not closing")),
+            reply = reply_sessions.join_next(),
+                if !reply_sessions.is_empty() => Select::Reply(reply.unwrap()??),
         } {
             Select::Listen(None) => break Ok(()),
             Select::Listen(Some((_, request))) => match entries.get(&request.client_id) {
@@ -110,14 +113,13 @@ pub async fn replica_session(
                         request.client_id,
                         ClientEntry::Submitted(request.request_num),
                     );
-                    let event = event.clone();
                     let app = replica.app.clone();
-                    replica.spawner.spawn(async move {
+                    reply_sessions.spawn(async move {
                         let reply = Reply {
                             request_num: request.request_num,
                             result: app.submit(request.op).await?,
                         };
-                        event.send((request.client_id, reply))
+                        Ok::<_, crate::Error>((request.client_id, reply))
                     });
                 }
             },
