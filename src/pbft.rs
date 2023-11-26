@@ -2,7 +2,7 @@ use std::{collections::HashMap, error::Error, fmt::Display, iter::repeat, sync::
 
 use borsh::{BorshDeserialize, BorshSerialize};
 use tokio::{
-    sync::Semaphore,
+    sync::{OwnedSemaphorePermit, Semaphore},
     task::{JoinHandle, JoinSet},
     time::{timeout_at, Instant},
 };
@@ -165,22 +165,6 @@ pub async fn replica_session(
         // TODO view change
     }
     Ok(())
-}
-
-async fn batch_session(
-    permits: Arc<Semaphore>,
-    mut source: EventSource<Request>,
-) -> crate::Result<Vec<Request>> {
-    let mut requests = vec![source.next().await?];
-    loop {
-        tokio::select! {
-            permit = permits.acquire() => {
-                permit?.forget();
-                break Ok(requests);
-            }
-            request = source.next(), if requests.len() < 100 => requests.push(request?),
-        }
-    }
 }
 
 type Quorum<T> = HashMap<u8, Message<T>>;
@@ -350,7 +334,8 @@ struct ViewState<'a, T, U> {
     reply_transport: U,
 
     client_entires: HashMap<u32, ClientEntry>,
-    batch_handle: Option<BatchHandle>,
+    requests: Vec<Request>,
+    permits: Arc<Semaphore>,
     propose_op: u32,
     prepare_op: u32,
     commit_op: u32,
@@ -363,13 +348,6 @@ struct ViewState<'a, T, U> {
 enum ClientEntry {
     Committing(u32),
     Committed(Reply),
-}
-
-#[derive(Debug)]
-struct BatchHandle {
-    event: EventSender<Request>,
-    session: JoinHandle<crate::Result<Vec<Request>>>,
-    permits: Arc<Semaphore>,
 }
 
 #[derive(Debug)]
@@ -393,17 +371,6 @@ where
         transport: T,
         reply_transport: U,
     ) -> Self {
-        let batch_handle = if replica.is_primary(view_num) {
-            let (event, source) = event_channel();
-            let permits = Arc::new(Semaphore::new(1));
-            Some(BatchHandle {
-                event,
-                session: tokio::spawn(batch_session(permits.clone(), source)),
-                permits,
-            })
-        } else {
-            None
-        };
         Self {
             replica,
             view_num,
@@ -411,7 +378,8 @@ where
             transport,
             reply_transport,
             client_entires: Default::default(),
-            batch_handle,
+            requests: Default::default(),
+            permits: Arc::new(Semaphore::new(1)),
             propose_op: Default::default(),
             prepare_op: Default::default(),
             commit_op: Default::default(),
@@ -436,34 +404,42 @@ where
                     commit_session = Some(&mut state.commit_session)
                 }
             }
-            tokio::select! {
-                listen = self.listen_source.next() => self.on_message(listen.map_err(|_| ListenClosed)?.1)?,
-                requests = &mut self.batch_handle.as_mut().unwrap().session,
-                    if self.batch_handle.is_some() => self.on_requests(requests??),
+            enum Select {
+                Listen(Option<(Addr, ToReplica)>),
+                Permit(OwnedSemaphorePermit),
+                PrepareQuorum(LogEntry),
+                CommitQuorum(Quorum<Commit>),
+                Reply((u32, Reply)),
+            }
+            match tokio::select! {
+                listen = self.listen_source.option_next() => Select::Listen(listen),
+                permit = self.permits.clone().acquire_owned(),
+                    if !self.requests.is_empty() => Select::Permit(permit?),
                 entry = prepare_session.unwrap(),
-                    if prepare_session.is_some() => self.on_prepare_quorum(entry??),
+                    if prepare_session.is_some() => Select::PrepareQuorum(entry??),
                 commits = commit_session.unwrap(),
-                    if commit_session.is_some() => self.on_commit_quorum(commits??),
+                    if commit_session.is_some() => Select::CommitQuorum(commits??),
                 reply = self.reply_sessions.join_next(),
-                    if !self.reply_sessions.is_empty() =>
-                {
-                    let (client_id, reply) = reply.unwrap()??;
-                    self.on_reply(client_id, reply)
+                    if !self.reply_sessions.is_empty() => Select::Reply(reply.unwrap()??),
+            } {
+                Select::Listen(None) => Err(ListenClosed)?,
+                Select::Listen(Some((_remote, message))) => match message {
+                    ToReplica::Request(request) => self.handle_request(request)?,
+                    ToReplica::PrePrepare(pre_prepare, requests) => {
+                        self.handle_pre_prepare(pre_prepare.deserialize()?, requests)?
+                    }
+                    ToReplica::Prepare(prepare) => self.handle_prepare(prepare.deserialize()?)?,
+                    ToReplica::Commit(commit) => self.handle_commit(commit.deserialize()?)?,
+                },
+                Select::Permit(permit) => {
+                    permit.forget();
+                    self.on_permit()
                 }
+                Select::PrepareQuorum(entry) => self.on_prepare_quorum(entry),
+                Select::CommitQuorum(commits) => self.on_commit_quorum(commits),
+                Select::Reply((client_id, reply)) => self.on_reply(client_id, reply),
             }
         }
-    }
-
-    fn on_message(&mut self, message: ToReplica) -> crate::Result<()> {
-        match message {
-            ToReplica::Request(request) => self.handle_request(request)?,
-            ToReplica::PrePrepare(pre_prepare, requests) => {
-                self.handle_pre_prepare(pre_prepare.deserialize()?, requests)?
-            }
-            ToReplica::Prepare(prepare) => self.handle_prepare(prepare.deserialize()?)?,
-            ToReplica::Commit(commit) => self.handle_commit(commit.deserialize()?)?,
-        }
-        Ok(())
     }
 
     fn handle_request(&mut self, request: Request) -> crate::Result<()> {
@@ -478,19 +454,15 @@ where
                         request.client_id,
                         ClientEntry::Committing(request.request_num),
                     );
-                    self.batch_handle.as_ref().unwrap().event.send(request)?
+                    self.requests.push(request)
                 }
             }
         }
         Ok(())
     }
 
-    fn on_requests(&mut self, requests: Vec<Request>) {
+    fn on_permit(&mut self) {
         assert!(self.replica.is_primary(self.view_num));
-        let batch_state = self.batch_handle.as_mut().unwrap();
-        let (event, source) = event_channel();
-        batch_state.event = event;
-        batch_state.session = tokio::spawn(batch_session(batch_state.permits.clone(), source));
 
         self.propose_op += 1;
         let (prepare_event, prepare_source) = event_channel();
@@ -503,7 +475,9 @@ where
                     self.replica.clone(),
                     self.view_num,
                     self.propose_op,
-                    requests,
+                    self.requests
+                        .drain(..100.min(self.requests.len()))
+                        .collect(),
                     prepare_source,
                     digest,
                     self.transport.clone(),
@@ -523,28 +497,43 @@ where
         );
     }
 
+    // silently discard send message errors because the contacted sessions may already finished
+    // collecting such kind of messages
+
     fn handle_pre_prepare(
         &mut self,
         pre_prepare: Message<PrePrepare>,
         requests: Vec<Request>,
     ) -> crate::Result<()> {
-        self.get_or_insert_quorum_state(pre_prepare.op_num)
-            .pre_prepare_event
-            .as_ref()
-            .expect("PrePrepare EventSender exists")
-            .send((pre_prepare, requests))
+        if pre_prepare.op_num > self.prepare_op {
+            let _ = self
+                .get_or_insert_quorum_state(pre_prepare.op_num)
+                .pre_prepare_event
+                .as_ref()
+                .ok_or(crate::err!("PrePrepare EventSender not exists"))?
+                .send((pre_prepare, requests));
+        }
+        Ok(())
     }
 
     fn handle_prepare(&mut self, prepare: Message<Prepare>) -> crate::Result<()> {
-        self.get_or_insert_quorum_state(prepare.op_num)
-            .prepare_event
-            .send(prepare)
+        if prepare.op_num > self.prepare_op {
+            let _ = self
+                .get_or_insert_quorum_state(prepare.op_num)
+                .prepare_event
+                .send(prepare);
+        }
+        Ok(())
     }
 
     fn handle_commit(&mut self, commit: Message<Commit>) -> crate::Result<()> {
-        self.get_or_insert_quorum_state(commit.op_num)
-            .commit_event
-            .send(commit)
+        if commit.op_num > self.commit_op {
+            let _ = self
+                .get_or_insert_quorum_state(commit.op_num)
+                .commit_event
+                .send(commit);
+        }
+        Ok(())
     }
 
     fn get_or_insert_quorum_state(&mut self, op_num: u32) -> &mut QuorumHandle {
@@ -628,7 +617,7 @@ where
         }
 
         if self.replica.is_primary(self.view_num) {
-            self.batch_handle.as_ref().unwrap().permits.add_permits(1)
+            self.permits.add_permits(1)
         }
     }
 
