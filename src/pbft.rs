@@ -2,7 +2,6 @@ use std::{collections::HashMap, error::Error, fmt::Display, iter::repeat, sync::
 
 use borsh::{BorshDeserialize, BorshSerialize};
 use tokio::{
-    sync::{OwnedSemaphorePermit, Semaphore},
     task::{JoinHandle, JoinSet},
     time::{timeout_at, Instant},
 };
@@ -335,7 +334,6 @@ struct ViewState<'a, T, U> {
 
     client_entires: HashMap<u32, ClientEntry>,
     requests: Vec<Request>,
-    permits: Arc<Semaphore>,
     propose_op: u32,
     prepare_op: u32,
     commit_op: u32,
@@ -379,7 +377,6 @@ where
             reply_transport,
             client_entires: Default::default(),
             requests: Default::default(),
-            permits: Arc::new(Semaphore::new(1)),
             propose_op: Default::default(),
             prepare_op: Default::default(),
             commit_op: Default::default(),
@@ -406,15 +403,12 @@ where
             }
             enum Select {
                 Listen(Option<(Addr, ToReplica)>),
-                Permit(OwnedSemaphorePermit),
                 PrepareQuorum(LogEntry),
                 CommitQuorum(Quorum<Commit>),
                 Reply((u32, Reply)),
             }
             match tokio::select! {
                 listen = self.listen_source.option_next() => Select::Listen(listen),
-                permit = self.permits.clone().acquire_owned(),
-                    if !self.requests.is_empty() => Select::Permit(permit?),
                 entry = prepare_session.unwrap(),
                     if prepare_session.is_some() => Select::PrepareQuorum(entry??),
                 commits = commit_session.unwrap(),
@@ -431,10 +425,6 @@ where
                     ToReplica::Prepare(prepare) => self.handle_prepare(prepare.deserialize()?)?,
                     ToReplica::Commit(commit) => self.handle_commit(commit.deserialize()?)?,
                 },
-                Select::Permit(permit) => {
-                    permit.forget();
-                    self.on_permit()
-                }
                 Select::PrepareQuorum(entry) => self.on_prepare_quorum(entry),
                 Select::CommitQuorum(commits) => self.on_commit_quorum(commits),
                 Select::Reply((client_id, reply)) => self.on_reply(client_id, reply),
@@ -454,14 +444,17 @@ where
                         request.client_id,
                         ClientEntry::Committing(request.request_num),
                     );
-                    self.requests.push(request)
+                    self.requests.push(request);
+                    if self.propose_op < self.commit_op + 1 {
+                        self.close_batch()
+                    }
                 }
             }
         }
         Ok(())
     }
 
-    fn on_permit(&mut self) {
+    fn close_batch(&mut self) {
         assert!(self.replica.is_primary(self.view_num));
 
         self.propose_op += 1;
@@ -617,7 +610,7 @@ where
         }
 
         if self.replica.is_primary(self.view_num) {
-            self.permits.add_permits(1)
+            self.close_batch()
         }
     }
 

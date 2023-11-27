@@ -8,7 +8,7 @@ Concurrent applications are usually implemented as stateless, *microservice* sty
 
 This codebase tries to develop a programming pattern that is suitable for concurrent stateful applications. Code snippets are grouped into *sessions*, which contain logic that connected with causal dependencies. Code in different sessions are causally independent to each other, thus share no state and can be concurrently executed. Each session is an asynchronous task (or coroutine) that drives its own event loop. A session has full control of what to be expected from event loop and even when to block on receiving events.
 
-The goal is to have *streamlined* code. Code skeleton for sessions:
+Besides efficiently express concurrency, one bonus goal is to have *streamlined* code. Code skeleton for sessions:
 
 ```rust
 async fn a_session(
@@ -76,5 +76,64 @@ Service sessions, as their name suggests, provide RPC-like service to other loca
 Any single one of the above may have solutions e.g. `async_trait` for the first one, but any combination will make it much harder.
 
 The examples of service sessions include replicated applications and protocol clients. It is tempting to implement protocol clients as "session generators", which seems to offer finer-grained control and be more elegant (which is the most important obviously). They are finally decided to be service sessions mainly because there are still occasional needs of persist states across client invocations (e.g. last view number for PBFT), and the fact of both applications and clients are service sessions potentially results in a more composable system.
+
+**Best practice of designing sessions.** (This section may evolve over time as I keep practicing writing sessions.) Some general steps to follow:
+
+* Start with a stateful, single event loop structure
+* Determine potential source of concurrency, i.e. the part of code whose result/effect is not dependency of (some of) the following code
+* Categorize the code snippet into one of the session patterns
+* Connect the sub-session back with channels and join handles
+
+Take a simple RPC server implementing at-most-once semantic as an example. Starting with one single event loop:
+
+```rust
+fn server_session() -> crate::Result<()> {
+    loop {
+        // TODO
+    }
+}
+```
+
+Add event source for incoming network messages, and accept a service session handle as upper layer application:
+
+```rust
+fn server_session(
+    // EventSource for incoming network messages
+    // SubmitHandle for upper layer application
+) -> crate::Result<()> {
+    loop {
+        // await on next network message
+        // preprocess message e.g. deduplicated
+        // await on invoking submit handle and wrap result into reply message
+        // save a copy of reply for following preprocessing and response to client
+    }
+}
+
+```
+
+The session already looks good. But if you are willing to trade some simplicity for concurrency, notice the third line on loop body can be concurrent to the next iteration. However, the forth line depends on its result and cannot be extracted out from the looping, so the best we can do is to spawn a collector session in its simplest form to wait on invoking submit handle:
+
+```rust
+
+fn server_session(
+    // EventSource for incoming network messages
+    // SubmitHandle for upper layer application
+) -> crate::Result<()> {
+    // initialize join set for reply sessions
+    loop {
+        // select
+        //   next network message =>
+        //     preprocess message e.g. deduplicated
+        //     spawn a reply session into join set which:
+        //       invoke submit handle and wrap result into reply message
+        //   next joined reply session from join set =>
+        //     save a copy of reply for following preprocessing and response to client
+    }
+}
+```
+
+With careful analysis, the modified version actually has slightly different semantic: the saved copies of replies are more stalled than the original version. The two versions are equivalent if the clients work in close loops.
+
+It's unnecessary to force UNIX "one thing at a time" style, KISS-style, small scale modular composable sessions, as long as concurrency is sufficiently developed. Sometimes the logic is monolithic by nature, and there's little thing we can do about it.
 
 **The implementation of (supporting) sessions.** Session is an abstraction that requires only few things other than language's built-in asynchronous features, and this codebase relies on Tokio for those left things. Most essentially, concurrent primitives `spawn` and `select!` are deeply baked into sessions logic, kind of like extensions of the Rust language. Other than this, asynchronous channels are massively used with trivial wrapping for error handling. The background task management mimics `JoinSet`, but implemented with channels to enable sharing. The network functions and time utilities are also used, but only as normal dependent library.
