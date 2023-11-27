@@ -16,7 +16,7 @@ use helloween::{
     crypto::{Signer, Verifier},
     event_channel,
     net::UdpSocket,
-    promise_channel,
+    pbft, promise_channel,
     replication::{close_loop_session, AddrBook, SocketAddrBook},
     task::BackgroundMonitor,
     transport::Addr,
@@ -85,20 +85,6 @@ async fn run_client_internal(state: Arc<AppState>, config: messages::Client) {
         let mut close_loop_sessions = JoinSet::new();
         let mut client_sessions = Vec::new();
         for id in config.id_range {
-            let (event, source) = event_channel();
-            let (invoke_event, invoke_source) = event_channel();
-
-            let socket = UdpSocket::bind(addr_book.client_addr(id)?).await?;
-            spawner.spawn({
-                let socket = socket.clone();
-                let stop = stop_listen.clone();
-                async move {
-                    socket
-                        .listen_session::<unreplicated::Reply, _>(event, stop)
-                        .await
-                }
-            });
-
             let client = Client {
                 id,
                 num_replica: config.num_replica,
@@ -106,12 +92,43 @@ async fn run_client_internal(state: Arc<AppState>, config: messages::Client) {
                 addr_book: addr_book.clone(),
                 retry_interval: Duration::from_millis(100),
             };
-            client_sessions.push(spawner.spawn(unreplicated::client_session(
-                client.into(),
-                invoke_source,
-                source,
-                socket.into_transport::<unreplicated::Request>(),
-            )));
+            let (invoke_event, invoke_source) = event_channel();
+            let socket = UdpSocket::bind(addr_book.client_addr(id)?).await?;
+
+            match config.protocol {
+                messages::Protocol::Unreplicated => {
+                    let (event, source) = event_channel();
+                    spawner.spawn({
+                        let socket = socket.clone();
+                        let stop = stop_listen.clone();
+                        async move {
+                            socket
+                                .listen_session::<unreplicated::Reply, _>(event, stop)
+                                .await
+                        }
+                    });
+                    client_sessions.push(spawner.spawn(unreplicated::client_session(
+                        client.into(),
+                        invoke_source,
+                        source,
+                        socket.into_transport::<unreplicated::Request>(),
+                    )));
+                }
+                messages::Protocol::Pbft => {
+                    let (event, source) = event_channel();
+                    spawner.spawn({
+                        let socket = socket.clone();
+                        let stop = stop_listen.clone();
+                        async move { socket.listen_session::<pbft::Reply, _>(event, stop).await }
+                    });
+                    client_sessions.push(spawner.spawn(pbft::client_session(
+                        client.into(),
+                        invoke_source,
+                        source,
+                        socket.into_transport::<pbft::ToReplica>(),
+                    )));
+                }
+            }
 
             close_loop_sessions.spawn(close_loop_session(
                 NullWorkload,
@@ -174,23 +191,13 @@ async fn run_replica_internal(
     if let Err(err) = async {
         let mut monitor = BackgroundMonitor::default();
         let spawner = monitor.spawner();
-        let mut addr_book = SocketAddrBook::from(config.addr_book);
-
-        let socket = UdpSocket::bind(Addr::Socket(addr_book.remove_addr(config.id)?)).await?;
-        let (listen_event, listen_source) = event_channel();
-        let stop_listen = CancellationToken::new();
-        spawner.spawn({
-            let socket = socket.clone();
-            let stop = stop_listen.clone();
-            async move {
-                socket
-                    .listen_session::<unreplicated::Request, _>(listen_event, stop)
-                    .await
-            }
-        });
 
         let (app_event, app_source) = event_channel();
         spawner.spawn(null_session(app_source));
+
+        let mut addr_book = SocketAddrBook::from(config.addr_book);
+        let socket = UdpSocket::bind(Addr::Socket(addr_book.remove_addr(config.id)?)).await?;
+        let stop_listen = CancellationToken::new();
 
         let mut verifiers = HashMap::new();
         for i in 0..config.num_replica {
@@ -206,11 +213,44 @@ async fn run_replica_internal(
             verifiers,
             addr_book: AddrBook::Socket(addr_book),
         };
-        spawner.spawn(unreplicated::replica_session(
-            replica.into(),
-            listen_source,
-            socket.into_transport::<unreplicated::Reply>(),
-        ));
+
+        match config.protocol {
+            messages::Protocol::Unreplicated => {
+                let (listen_event, listen_source) = event_channel();
+                spawner.spawn({
+                    let socket = socket.clone();
+                    let stop = stop_listen.clone();
+                    async move {
+                        socket
+                            .listen_session::<unreplicated::Request, _>(listen_event, stop)
+                            .await
+                    }
+                });
+                spawner.spawn(unreplicated::replica_session(
+                    replica.into(),
+                    listen_source,
+                    socket.into_transport::<unreplicated::Reply>(),
+                ));
+            }
+            messages::Protocol::Pbft => {
+                let (listen_event, listen_source) = event_channel();
+                spawner.spawn({
+                    let socket = socket.clone();
+                    let stop = stop_listen.clone();
+                    async move {
+                        socket
+                            .listen_session::<pbft::ToReplica, _>(listen_event, stop)
+                            .await
+                    }
+                });
+                spawner.spawn(pbft::replica_session(
+                    replica.into(),
+                    listen_source,
+                    socket.clone().into_transport::<pbft::ToReplica>(),
+                    socket.into_transport::<pbft::Reply>(),
+                ));
+            }
+        }
         drop(spawner);
 
         let ack = monitor.wait_task(reset_promise).await??;

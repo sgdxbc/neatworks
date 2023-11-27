@@ -63,8 +63,8 @@ pub enum ToReplica {
 pub async fn client_session(
     client: Arc<Client>,
     mut invoke_source: SubmitSource<Vec<u8>, Vec<u8>>,
-    mut source: EventSource<Reply>,
-    transport: impl Transport<Request>,
+    mut source: EventSource<(Addr, Reply)>,
+    transport: impl Transport<ToReplica>,
 ) -> crate::Result<()> {
     let mut request_num = 0;
     let mut primary_replica = 0;
@@ -94,21 +94,21 @@ async fn request_session(
     client: &Client,
     request: Request,
     primary_replica: &mut u8,
-    source: &mut EventSource<Reply>,
-    transport: &impl Transport<Request>,
+    source: &mut EventSource<(Addr, Reply)>,
+    transport: &impl Transport<ToReplica>,
 ) -> crate::Result<Vec<u8>> {
     let mut replies = HashMap::new();
 
     transport
         .send_to(
             client.addr_book.replica_addr(*primary_replica)?,
-            request.clone(),
+            ToReplica::Request(request.clone()),
         )
         .await?;
     loop {
         let deadline = Instant::now() + client.retry_interval;
         while let Ok(reply) = timeout_at(deadline, source.next()).await {
-            let reply = reply?;
+            let (_remote, reply) = reply?;
             assert!(reply.request_num <= request.request_num);
             if reply.request_num == request.request_num {
                 replies.insert(reply.replica_id, reply.clone());
@@ -124,7 +124,10 @@ async fn request_session(
             }
         }
         transport
-            .send_to_all(client.addr_book.replica_addrs(), request.clone())
+            .send_to_all(
+                client.addr_book.replica_addrs(),
+                ToReplica::Request(request.clone()),
+            )
             .await?
     }
 }
@@ -393,12 +396,12 @@ where
             // maybe get solved by `get_many_mut` if it get stablized
             let mut prepare_session = None;
             let mut commit_session = None;
-            for (&op, state) in &mut self.quorum_handles {
+            for (&op, handle) in &mut self.quorum_handles {
                 if op == self.prepare_op + 1 {
-                    prepare_session = Some(&mut state.prepare_session)
+                    prepare_session = Some(&mut handle.prepare_session)
                 }
                 if op == self.commit_op + 1 {
-                    commit_session = Some(&mut state.commit_session)
+                    commit_session = Some(&mut handle.commit_session)
                 }
             }
             enum Select {
@@ -456,6 +459,7 @@ where
 
     fn close_batch(&mut self) {
         assert!(self.replica.is_primary(self.view_num));
+        assert!(!self.requests.is_empty());
 
         self.propose_op += 1;
         let (prepare_event, prepare_source) = event_channel();
@@ -609,7 +613,7 @@ where
             });
         }
 
-        if self.replica.is_primary(self.view_num) {
+        if self.replica.is_primary(self.view_num) && !self.requests.is_empty() {
             self.close_batch()
         }
     }

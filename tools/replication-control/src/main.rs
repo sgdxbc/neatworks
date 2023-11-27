@@ -18,6 +18,7 @@ async fn main() -> anyhow::Result<()> {
         )
         .unwrap();
     let result = benchmark_session(messages::Protocol::Unreplicated).await?;
+    // let result = benchmark_session(messages::Protocol::Pbft).await?;
     println!("{result:?}");
     Ok(())
 }
@@ -93,8 +94,13 @@ async fn benchmark_session(protocol: messages::Protocol) -> anyhow::Result<(f32,
 
     let mut replica_sessions = JoinSet::new();
     let shutdown = CancellationToken::new();
-    let urls = ["http://127.0.0.1:10000"];
-    for (i, url) in urls.into_iter().enumerate() {
+    let urls = [
+        "http://127.0.0.1:10000",
+        "http://127.0.0.1:10001",
+        "http://127.0.0.1:10002",
+        "http://127.0.0.1:10003",
+    ];
+    for (i, url) in urls.into_iter().enumerate().take(num_replica) {
         let config = messages::Replica {
             id: i as _,
             addr_book: addr_book.clone(),
@@ -116,7 +122,7 @@ async fn benchmark_session(protocol: messages::Protocol) -> anyhow::Result<(f32,
         num_faulty,
         protocol,
     };
-    let url = "http://127.0.0.1:10001".into();
+    let url = "http://127.0.0.1:10004".into();
     client_sessions.spawn(client_session(config, url));
     let mut throughput_sum = 0.;
     let mut latency_sum = Duration::ZERO;
