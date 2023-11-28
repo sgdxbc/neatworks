@@ -80,7 +80,7 @@ The examples of service sessions include replicated applications and protocol cl
 **Best practice of designing sessions.** (This section may evolve over time as I keep practicing writing sessions.) Some general steps to follow:
 
 * Start with a stateful, single event loop structure
-* Determine potential source of concurrency, i.e. the part of code whose result/effect is not dependency of (some of) the following code
+* Determine potential source of concurrency, i.e. the part of code whose result/effect is not needed to start the next iteration of event loop
 * Categorize the code snippet into one of the session patterns
 * Connect the sub-session back with channels and join handles
 

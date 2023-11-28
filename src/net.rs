@@ -2,7 +2,6 @@ use std::sync::Arc;
 
 use borsh::{BorshDeserialize, BorshSerialize};
 use derive_more::From;
-use tokio_util::sync::CancellationToken;
 
 use crate::{
     channel::EventSender,
@@ -21,24 +20,20 @@ impl UdpSocket {
         Ok(Self(Arc::new(tokio::net::UdpSocket::bind(addr).await?)))
     }
 
-    pub async fn listen_session<M, E>(
-        &self,
-        event: EventSender<(Addr, E)>,
-        stop: CancellationToken,
-    ) -> crate::Result<()>
+    pub async fn listen_session<M>(&self, event: EventSender<(Addr, M)>) -> crate::Result<()>
     where
-        M: BorshDeserialize + Into<E> + Send + 'static,
+        M: BorshDeserialize + Send + 'static,
     {
         let mut buf = vec![0; 65536];
         loop {
             let (len, remote) = tokio::select! {
                 recv_from = self.0.recv_from(&mut buf) => recv_from?,
-                () = stop.cancelled() => break Ok(()),
+                () = event.closed() => break Ok(()),
             };
-            event.send((
-                Addr::Socket(remote),
-                borsh::from_slice::<M>(&buf[..len])?.into(),
-            ))?
+            let send = event.send((Addr::Socket(remote), borsh::from_slice::<M>(&buf[..len])?));
+            if send.is_err() {
+                eprintln!("listener closed channel {self:?}")
+            }
         }
     }
 }

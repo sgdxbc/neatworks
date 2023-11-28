@@ -21,7 +21,7 @@ pub fn digest(data: &impl BorshSerialize) -> crate::Result<Digest> {
 }
 
 /// On-wire format of signed messages. Happen to be type-erasured.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub struct Packet {
     signature: Signature,
     inner: Vec<u8>,
@@ -30,21 +30,21 @@ pub struct Packet {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub struct Signature([u8; 64]);
 
-impl BorshSerialize for Packet {
-    fn serialize<W: std::io::Write>(&self, writer: &mut W) -> std::io::Result<()> {
-        self.signature.serialize(writer)?;
-        writer.write_all(&self.inner)
-    }
-}
+// impl BorshSerialize for Packet {
+//     fn serialize<W: std::io::Write>(&self, writer: &mut W) -> std::io::Result<()> {
+//         self.signature.serialize(writer)?;
+//         writer.write_all(&self.inner)
+//     }
+// }
 
-impl BorshDeserialize for Packet {
-    fn deserialize_reader<R: std::io::Read>(reader: &mut R) -> std::io::Result<Self> {
-        let signature = Signature::deserialize_reader(reader)?;
-        let mut inner = Vec::new();
-        reader.read_to_end(&mut inner)?;
-        Ok(Self { signature, inner })
-    }
-}
+// impl BorshDeserialize for Packet {
+//     fn deserialize_reader<R: std::io::Read>(reader: &mut R) -> std::io::Result<Self> {
+//         let signature = Signature::deserialize_reader(reader)?;
+//         let mut inner = Vec::new();
+//         reader.read_to_end(&mut inner)?;
+//         Ok(Self { signature, inner })
+//     }
+// }
 
 /// In-memory representation of `M`, equiped with a signature that may or may
 /// not be verified.

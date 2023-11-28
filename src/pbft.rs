@@ -1,4 +1,4 @@
-use std::{collections::HashMap, error::Error, fmt::Display, iter::repeat, sync::Arc};
+use std::{collections::HashMap, iter::repeat, sync::Arc};
 
 use borsh::{BorshDeserialize, BorshSerialize};
 use tokio::{
@@ -132,17 +132,6 @@ async fn request_session(
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Hash)]
-struct ListenClosed;
-
-impl Display for ListenClosed {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{self:?}")
-    }
-}
-
-impl Error for ListenClosed {}
-
 pub async fn replica_session(
     replica: Arc<Replica>,
     mut listen_source: EventSource<(Addr, ToReplica)>,
@@ -150,19 +139,16 @@ pub async fn replica_session(
     reply_transport: impl Transport<Reply>,
 ) -> crate::Result<()> {
     for view_num in 0.. {
-        match ViewState::new(
+        let mut view = ViewState::new(
             replica.clone(),
             view_num,
             &mut listen_source,
             transport.clone(),
             reply_transport.clone(),
-        )
-        .session()
-        .await
-        {
-            Ok(_) => {}
-            Err(err) if err.downcast_ref::<ListenClosed>().is_some() => break,
-            err => err?,
+        );
+        tokio::select! {
+            view = view.session() => view?,
+            () = replica.stop.cancelled() => break,
         }
         // TODO view change
     }
@@ -400,27 +386,32 @@ where
                 if op == self.prepare_op + 1 {
                     prepare_session = Some(&mut handle.prepare_session)
                 }
-                if op == self.commit_op + 1 {
+                if op <= self.prepare_op && op == self.commit_op + 1 {
                     commit_session = Some(&mut handle.commit_session)
                 }
             }
+            async fn join_option<T>(
+                handle: Option<&mut JoinHandle<T>>,
+            ) -> Option<crate::Result<T>> {
+                if let Some(handle) = handle {
+                    Some(handle.await.map_err(Into::into))
+                } else {
+                    None
+                }
+            }
             enum Select {
-                Listen(Option<(Addr, ToReplica)>),
+                Listen((Addr, ToReplica)),
                 PrepareQuorum(LogEntry),
                 CommitQuorum(Quorum<Commit>),
                 Reply((u32, Reply)),
             }
             match tokio::select! {
-                listen = self.listen_source.option_next() => Select::Listen(listen),
-                entry = prepare_session.unwrap(),
-                    if prepare_session.is_some() => Select::PrepareQuorum(entry??),
-                commits = commit_session.unwrap(),
-                    if commit_session.is_some() => Select::CommitQuorum(commits??),
-                reply = self.reply_sessions.join_next(),
-                    if !self.reply_sessions.is_empty() => Select::Reply(reply.unwrap()??),
+                listen = self.listen_source.next() => Select::Listen(listen?),
+                Some(entry) = join_option(prepare_session) => Select::PrepareQuorum(entry??),
+                Some(commits) = join_option(commit_session) => Select::CommitQuorum(commits??),
+                Some(reply) = self.reply_sessions.join_next() => Select::Reply(reply??),
             } {
-                Select::Listen(None) => Err(ListenClosed)?,
-                Select::Listen(Some((_remote, message))) => match message {
+                Select::Listen((_remote, message)) => match message {
                     ToReplica::Request(request) => self.handle_request(request)?,
                     ToReplica::PrePrepare(pre_prepare, requests) => {
                         self.handle_pre_prepare(pre_prepare.deserialize()?, requests)?
@@ -534,8 +525,8 @@ where
     }
 
     fn get_or_insert_quorum_state(&mut self, op_num: u32) -> &mut QuorumHandle {
-        assert!(!self.replica.is_primary(self.view_num));
         self.quorum_handles.entry(op_num).or_insert_with(|| {
+            assert!(!self.replica.is_primary(self.view_num));
             let (pre_prepare_event, pre_prepare_source) = event_channel();
             let (prepare_event, prepare_source) = event_channel();
             let (commit_event, commit_source) = event_channel();
@@ -571,10 +562,11 @@ where
         self.prepare_op += 1;
         for request in &entry.requests {
             if self.replica.is_primary(self.view_num) {
-                assert_eq!(
+                assert!(matches!(
                     self.client_entires.get(&request.client_id),
-                    Some(&ClientEntry::Committing(request.request_num))
-                )
+                    Some(ClientEntry::Committing(request_num))
+                        if *request_num >= request.request_num
+                ))
             } else {
                 self.client_entires.insert(
                     request.client_id,
@@ -619,15 +611,25 @@ where
     }
 
     fn on_reply(&mut self, client_id: u32, reply: Reply) {
-        match self
-            .client_entires
-            .insert(client_id, ClientEntry::Committed(reply.clone()))
-        {
-            Some(ClientEntry::Committing(request_num)) if request_num == reply.request_num => self
-                .replica
-                .send_to_client(client_id, reply, self.reply_transport.clone()),
-            Some(ClientEntry::Committing(request_num)) if request_num > reply.request_num => {}
-            _ => unreachable!(),
+        // println!("{reply:?}");
+        match self.client_entires.get(&client_id) {
+            Some(ClientEntry::Committing(request_num)) => {
+                assert!(*request_num >= reply.request_num);
+                if *request_num != reply.request_num {
+                    return;
+                }
+            }
+            Some(ClientEntry::Committed(committed_reply)) => {
+                assert_ne!(committed_reply.request_num, reply.request_num);
+                if committed_reply.request_num > reply.request_num {
+                    return;
+                }
+            }
+            _ => {}
         }
+        self.client_entires
+            .insert(client_id, ClientEntry::Committed(reply.clone()));
+        self.replica
+            .send_to_client(client_id, reply, self.reply_transport.clone())
     }
 }

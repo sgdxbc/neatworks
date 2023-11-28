@@ -1,4 +1,4 @@
-use std::{sync::OnceLock, time::Duration};
+use std::{convert::identity, sync::OnceLock, time::Duration};
 
 use messages::AddrBook;
 use replication_control_messages as messages;
@@ -36,7 +36,7 @@ async fn client_session(config: messages::Client, url: String) -> anyhow::Result
     loop {
         sleep(Duration::from_secs(1)).await;
         let result = client
-            .post(format!("{url}/take-client-result"))
+            .post(format!("{url}/join-client"))
             .send()
             .await?
             .error_for_status()?
@@ -48,18 +48,8 @@ async fn client_session(config: messages::Client, url: String) -> anyhow::Result
     }
 }
 
-async fn replica_session(
-    config: messages::Replica,
-    url: String,
-    shutdown: CancellationToken,
-) -> anyhow::Result<()> {
+async fn replica_session(url: String, shutdown: CancellationToken) -> anyhow::Result<()> {
     let client = CLIENT.get().unwrap();
-    client
-        .post(format!("{url}/run-replica"))
-        .json(&config)
-        .send()
-        .await?
-        .error_for_status()?;
     while timeout(Duration::from_secs(1), shutdown.cancelled())
         .await
         .is_err()
@@ -79,13 +69,16 @@ async fn replica_session(
 }
 
 async fn benchmark_session(protocol: messages::Protocol) -> anyhow::Result<(f32, Duration)> {
+    let client = CLIENT.get().unwrap();
     let mut addr_book = AddrBook::default();
     addr_book
         .client_addrs
         .insert(0, ([127, 0, 0, 1], 20000).into());
-    addr_book
-        .replica_addrs
-        .insert(0, ([127, 0, 0, 1], 30000).into());
+    for i in 0..4 {
+        addr_book
+            .replica_addrs
+            .insert(i, ([127, 0, 0, 1], 30000 + i as u16).into());
+    }
     let num_faulty = match protocol {
         messages::Protocol::Unreplicated => 0,
         _ => 1,
@@ -108,11 +101,13 @@ async fn benchmark_session(protocol: messages::Protocol) -> anyhow::Result<(f32,
             num_faulty,
             protocol,
         };
-        replica_sessions.spawn(replica_session(
-            config.clone(),
-            url.into(),
-            shutdown.clone(),
-        ));
+        client
+            .post(format!("{url}/run-replica"))
+            .json(&config)
+            .send()
+            .await?
+            .error_for_status()?;
+        replica_sessions.spawn(replica_session(url.into(), shutdown.clone()));
     }
     let mut client_sessions = JoinSet::new();
     let config = messages::Client {
@@ -128,7 +123,7 @@ async fn benchmark_session(protocol: messages::Protocol) -> anyhow::Result<(f32,
     let mut latency_sum = Duration::ZERO;
     while let Some(client_result) = tokio::select! {
         result = client_sessions.join_next() => result,
-        result = replica_sessions.join_next() => Err(result.unwrap().unwrap_err())?,
+        result = replica_sessions.join_next() => Err(result.unwrap().map_err(Into::into).and_then(identity).unwrap_err())?,
     } {
         // println!("{client_result:?}");
         let (throughput, latency) = client_result??;

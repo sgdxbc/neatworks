@@ -31,6 +31,10 @@ impl<M> EventSender<M> {
             .send(message)
             .map_err(|_| crate::err!("unexpected event channel closing"))
     }
+
+    pub async fn closed(&self) {
+        self.0.closed().await
+    }
 }
 
 /// A thin wrapper around Tokio's unbounded MPSC channel.

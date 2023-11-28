@@ -5,7 +5,8 @@
 use std::{collections::HashMap, net::SocketAddr, time::Duration};
 
 use derive_more::From;
-use tokio::time::{timeout_at, Instant};
+use tokio::time::{timeout, Instant};
+use tokio_util::sync::CancellationToken;
 
 use crate::{
     channel::SubmitHandle,
@@ -142,12 +143,13 @@ pub async fn close_loop_session(
 ) -> crate::Result<Vec<Duration>> {
     let deadline = Instant::now() + duration;
     let mut latencies = Vec::new();
-    let mut start;
-    while let Ok(result) = {
-        start = Instant::now();
-        timeout_at(deadline, workload.session(invoke_handle.clone())).await
-    } {
-        result?;
+    while deadline.elapsed() == Duration::ZERO {
+        let start = Instant::now();
+        timeout(
+            Duration::from_millis(10),
+            workload.session(invoke_handle.clone()),
+        )
+        .await??;
         latencies.push(start.elapsed());
     }
     Ok(latencies)
@@ -163,6 +165,7 @@ pub struct Replica {
     pub signer: Signer,
     pub verifiers: HashMap<u8, Verifier>,
     pub addr_book: AddrBook,
+    pub stop: CancellationToken,
 }
 
 impl Replica {

@@ -82,16 +82,15 @@ pub async fn replica_session(
 
     loop {
         enum Select {
-            Listen(Option<(Addr, Request)>),
+            Listen((Addr, Request)),
             Reply((u32, Reply)),
         }
         match tokio::select! {
-            listen = listen_source.option_next() => Select::Listen(listen),
-            reply = reply_sessions.join_next(),
-                if !reply_sessions.is_empty() => Select::Reply(reply.unwrap()??),
+            listen = listen_source.next() => Select::Listen(listen?),
+            Some(reply) = reply_sessions.join_next() => Select::Reply(reply??),
+            () = replica.stop.cancelled() => break Ok(()),
         } {
-            Select::Listen(None) => break Ok(()),
-            Select::Listen(Some((_, request))) => match entries.get(&request.client_id) {
+            Select::Listen((_remote, request)) => match entries.get(&request.client_id) {
                 Some(ClientEntry::Submitted(request_num))
                     if *request_num >= request.request_num =>
                 {
