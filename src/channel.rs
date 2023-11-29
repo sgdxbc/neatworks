@@ -54,10 +54,10 @@ pub fn promise_channel<T>() -> (PromiseSender<T>, PromiseSource<T>) {
 }
 
 impl<T> PromiseSender<T> {
-    pub fn resolve(self, value: T) {
-        if self.0.send(value).is_err() {
-            eprintln!("return channel closed before submitted task finishes")
-        }
+    pub fn resolve(self, value: T) -> crate::Result<()> {
+        self.0
+            .send(value)
+            .map_err(|_| crate::err!("return channel closed before submitted task finishes"))
     }
 }
 

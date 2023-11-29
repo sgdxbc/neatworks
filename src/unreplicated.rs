@@ -40,7 +40,7 @@ pub async fn client_session(
             request_num,
             op,
         };
-        result.resolve(request_session(&client, request, &mut source, &transport).await?)
+        result.resolve(request_session(&client, request, &mut source, &transport).await?)?
     }
     Ok(())
 }
@@ -88,7 +88,7 @@ pub async fn replica_session(
         match tokio::select! {
             listen = listen_source.next() => Select::Listen(listen?),
             Some(reply) = reply_sessions.join_next() => Select::Reply(reply??),
-            () = replica.stop.cancelled() => break Ok(()),
+            () = replica.stop.cancelled() => break,
         } {
             Select::Listen((_remote, request)) => match entries.get(&request.client_id) {
                 Some(ClientEntry::Submitted(request_num))
@@ -129,4 +129,9 @@ pub async fn replica_session(
             }
         }
     }
+
+    while let Some(result) = reply_sessions.join_next().await {
+        result??;
+    }
+    Ok(())
 }

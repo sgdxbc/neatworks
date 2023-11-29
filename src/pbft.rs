@@ -85,7 +85,7 @@ pub async fn client_session(
                 &transport,
             )
             .await?,
-        )
+        )?
     }
     Ok(())
 }
@@ -138,11 +138,13 @@ pub async fn replica_session(
     transport: impl Transport<ToReplica>,
     reply_transport: impl Transport<Reply>,
 ) -> crate::Result<()> {
+    let mut reply_sessions = JoinSet::new();
     for view_num in 0.. {
         let mut view = ViewState::new(
             replica.clone(),
             view_num,
             &mut listen_source,
+            &mut reply_sessions,
             transport.clone(),
             reply_transport.clone(),
         );
@@ -151,6 +153,9 @@ pub async fn replica_session(
             () = replica.stop.cancelled() => break,
         }
         // TODO view change
+    }
+    while let Some(result) = reply_sessions.join_next().await {
+        result??;
     }
     Ok(())
 }
@@ -210,7 +215,7 @@ async fn prepare_session(
             prepares.insert(prepare.replica_id, prepare);
         }
     }
-    commit_digest.resolve(pre_prepare.digest);
+    commit_digest.resolve(pre_prepare.digest)?;
     Ok(LogEntry {
         requests,
         pre_prepare,
@@ -328,7 +333,7 @@ struct ViewState<'a, T, U> {
     commit_op: u32,
     quorum_handles: HashMap<u32, QuorumHandle>,
     log_entries: HashMap<u32, LogEntry>,
-    reply_sessions: JoinSet<crate::Result<(u32, Reply)>>,
+    reply_sessions: &'a mut JoinSet<crate::Result<(u32, Reply)>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -355,6 +360,7 @@ where
         replica: Arc<Replica>,
         view_num: u32,
         listen_source: &'a mut EventSource<(Addr, ToReplica)>,
+        reply_sessions: &'a mut JoinSet<crate::Result<(u32, Reply)>>,
         transport: T,
         reply_transport: U,
     ) -> Self {
@@ -371,7 +377,7 @@ where
             commit_op: Default::default(),
             quorum_handles: Default::default(),
             log_entries: Default::default(),
-            reply_sessions: Default::default(),
+            reply_sessions,
         }
     }
 

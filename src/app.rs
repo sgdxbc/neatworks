@@ -8,7 +8,7 @@ where
     U: Default,
 {
     while let Some((_, result)) = source.option_next().await {
-        result.resolve(Default::default())
+        result.resolve(Default::default())?
     }
     Ok(())
 }

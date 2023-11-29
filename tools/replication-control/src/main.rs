@@ -17,8 +17,8 @@ async fn main() -> anyhow::Result<()> {
                 .build()?,
         )
         .unwrap();
-    // let result = benchmark_session(messages::Protocol::Unreplicated).await?;
-    let result = benchmark_session(messages::Protocol::Pbft).await?;
+    let result = benchmark_session(messages::Protocol::Unreplicated).await?;
+    // let result = benchmark_session(messages::Protocol::Pbft).await?;
     println!("{result:?}");
     Ok(())
 }
