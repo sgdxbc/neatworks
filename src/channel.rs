@@ -15,7 +15,7 @@ impl<M> EventSource<M> {
 }
 
 #[derive(Debug)]
-pub struct EventSender<M>(tokio::sync::mpsc::UnboundedSender<M>);
+pub struct EventSender<M>(pub tokio::sync::mpsc::UnboundedSender<M>);
 
 impl<M> Clone for EventSender<M> {
     fn clone(&self) -> Self {

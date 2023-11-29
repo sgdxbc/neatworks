@@ -1,4 +1,6 @@
-use axum::Router;
+use std::sync::Arc;
+
+use axum::{extract::State, routing::post, Router};
 
 use tokio::net::TcpListener;
 use tokio_util::sync::CancellationToken;
@@ -13,7 +15,9 @@ async fn main() -> helloween::Result<()> {
         .parse::<u16>()?;
     let app = AppState::default();
     let shutdown = app.shutdown.clone();
-    let app = Router::new();
+    let app = Router::new()
+        .route("/run-peer", post(run_peer))
+        .with_state(app.into());
     let signal_task = tokio::spawn({
         let shutdown = shutdown.clone();
         async move {
@@ -41,4 +45,8 @@ struct AppState {
     shutdown: CancellationToken,
 }
 
-// type App = State<Arc<AppState>>;
+type App = State<Arc<AppState>>;
+
+async fn run_peer(State(state): App) {
+    //
+}

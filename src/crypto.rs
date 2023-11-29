@@ -128,16 +128,40 @@ impl From<secp256k1::PublicKey> for Verifier {
     }
 }
 
-impl Verifier {
-    pub fn new_hardcoded(index: usize) -> Self {
+impl From<&Signer> for Verifier {
+    fn from(Signer(key): &Signer) -> Self {
         thread_local! {
             static SECP: secp256k1::Secp256k1<secp256k1::SignOnly> =
                 secp256k1::Secp256k1::signing_only();
         }
-        let Signer(key) = Signer::new_hardcoded(index);
         Self(SECP.with(|secp| key.public_key(secp)))
     }
+}
 
+impl From<Signer> for Verifier {
+    fn from(value: Signer) -> Self {
+        Self::from(&value)
+    }
+}
+
+impl BorshSerialize for Verifier {
+    fn serialize<W: std::io::Write>(&self, writer: &mut W) -> std::io::Result<()> {
+        BorshSerialize::serialize(&self.0.serialize(), writer)
+    }
+}
+
+impl BorshDeserialize for Verifier {
+    fn deserialize_reader<R: std::io::Read>(reader: &mut R) -> borsh::io::Result<Self> {
+        Ok(Self(
+            secp256k1::PublicKey::from_slice(&<[u8; 33] as BorshDeserialize>::deserialize_reader(
+                reader,
+            )?)
+            .map_err(|err| borsh::io::Error::new(borsh::io::ErrorKind::InvalidInput, err))?,
+        ))
+    }
+}
+
+impl Verifier {
     pub fn verify<M>(&self, message: &mut Message<M>) -> crate::Result<()> {
         if message.verified {
             return Ok(());

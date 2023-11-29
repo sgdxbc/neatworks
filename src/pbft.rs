@@ -30,14 +30,14 @@ pub struct Reply {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
-pub struct PrePrepare {
+struct PrePrepare {
     view_num: u32,
     op_num: u32,
     digest: Digest,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
-pub struct Prepare {
+struct Prepare {
     view_num: u32,
     op_num: u32,
     digest: Digest,
@@ -45,7 +45,7 @@ pub struct Prepare {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
-pub struct Commit {
+struct Commit {
     view_num: u32,
     op_num: u32,
     digest: Digest,

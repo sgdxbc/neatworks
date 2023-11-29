@@ -220,7 +220,7 @@ async fn run_replica_internal(
 
         let mut verifiers = HashMap::new();
         for i in 0..config.num_replica {
-            verifiers.insert(i as _, Verifier::new_hardcoded(i));
+            verifiers.insert(i as _, Verifier::from(Signer::new_hardcoded(i)));
         }
         let replica = Replica {
             id: config.id,
