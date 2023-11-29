@@ -1,7 +1,6 @@
 use std::sync::Arc;
 
 use borsh::{BorshDeserialize, BorshSerialize};
-use derive_more::From;
 
 use crate::{
     channel::EventSender,
@@ -9,7 +8,7 @@ use crate::{
     Transport,
 };
 
-#[derive(Debug, Clone, From)]
+#[derive(Debug, Clone)]
 pub struct UdpSocket(Arc<tokio::net::UdpSocket>);
 
 impl UdpSocket {

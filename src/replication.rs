@@ -4,7 +4,6 @@
 
 use std::{collections::HashMap, net::SocketAddr, time::Duration};
 
-use derive_more::From;
 use tokio::time::{timeout, Instant};
 use tokio_util::sync::CancellationToken;
 
@@ -16,7 +15,7 @@ use crate::{
     Transport,
 };
 
-#[derive(Debug, Clone, PartialEq, Eq, From)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum AddrBook {
     Socket(SocketAddrBook),
     Untyped(UntypedAddrBook),

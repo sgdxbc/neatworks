@@ -8,7 +8,7 @@ use axum::{
     extract::State,
     response::IntoResponse,
     routing::{get, post},
-    Json, Router, Server,
+    Json, Router,
 };
 use helloween::{
     app::{null_session, NullWorkload},
@@ -23,6 +23,7 @@ use helloween::{
 };
 use replication_control_messages as messages;
 use tokio::{
+    net::TcpListener,
     task::{JoinHandle, JoinSet},
     time::timeout,
 };
@@ -56,11 +57,14 @@ async fn main() -> helloween::Result<()> {
             result
         }
     });
-    Server::bind(&([0, 0, 0, 0], port).into())
-        .serve(app.into_make_service())
-        .with_graceful_shutdown(shutdown.cancelled())
-        .await?;
-    signal_task.await??;
+    // we lose graceful shutdown (in a easy way) after upgrading axum to 0.7, so tentatively give up
+    // on that
+    // also not sure why only type checks with extra async wrapper
+    let serve = async { axum::serve(TcpListener::bind(("0.0.0.0", port)).await?, app).await };
+    tokio::select! {
+        result = serve => result?,
+        result = signal_task => result??,
+    }
     Ok(())
 }
 

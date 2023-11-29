@@ -1,6 +1,4 @@
-use derive_more::From;
-
-#[derive(Debug, From)]
+#[derive(Debug)]
 pub struct EventSource<M>(tokio::sync::mpsc::UnboundedReceiver<M>);
 
 impl<M> EventSource<M> {
@@ -16,7 +14,7 @@ impl<M> EventSource<M> {
     }
 }
 
-#[derive(Debug, From)]
+#[derive(Debug)]
 pub struct EventSender<M>(tokio::sync::mpsc::UnboundedSender<M>);
 
 impl<M> Clone for EventSender<M> {
@@ -45,7 +43,7 @@ pub fn event_channel<M>() -> (EventSender<M>, EventSource<M>) {
     (EventSender(channel.0), EventSource(channel.1))
 }
 
-#[derive(Debug, From)]
+#[derive(Debug)]
 pub struct PromiseSender<T>(tokio::sync::oneshot::Sender<T>);
 
 pub type PromiseSource<T> = tokio::sync::oneshot::Receiver<T>;
