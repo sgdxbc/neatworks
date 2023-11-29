@@ -1,6 +1,7 @@
 pub mod app;
 pub mod channel;
 pub mod crypto;
+pub mod kademlia;
 pub mod net;
 pub mod pbft;
 pub mod replication;

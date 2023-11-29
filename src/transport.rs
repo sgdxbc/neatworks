@@ -1,5 +1,5 @@
 //! A transportation abstraction that supports multiplexing.
-//! 
+//!
 //! The implementations of `Transport<M>` e.g. `UdpTransport<N>` may take
 //! another type parameter `N`, and implement `Transport<M>` whenever
 //! `M: Into<N>`. This would allow sessions to be multiplexed together by
@@ -26,6 +26,8 @@
 //! end up in session A's event loop, so session A should relay the messages
 //! into sub-sessions event loop manually, act as a middleware if necessary.
 
+use borsh::{BorshDeserialize, BorshSerialize};
+
 pub trait Message
 where
     Self: Clone + Send + Sync + 'static,
@@ -34,7 +36,7 @@ where
 
 impl<M> Message for M where M: Clone + Send + Sync + 'static {}
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, BorshSerialize, BorshDeserialize)]
 pub enum Addr {
     Socket(std::net::SocketAddr),
     Untyped(String),

@@ -16,6 +16,7 @@ anyhow = { version = "1.0.75", features = ["backtrace"] }
 async-trait = "0.1.74"
 axum = "0.7.1"
 borsh = { version = "1.2.0", features = ["derive"] }
+ethnum = "1.5.0"
 replication-control-messages = { version = "0.1.0", path = "tools/replication-control-messages" }
 secp256k1 = { version = "0.28.0", features = ["hashes"] }
 tokio = { version = "1.33.0", features = ["full"] }

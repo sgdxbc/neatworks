@@ -1,9 +1,13 @@
-//! Digital signature solution.
+//! Solution for digest and digital signature.
 //!
-//! In this design, signing/verifying is performed against *serialized* messages
-//! (`Packet`s) to avoid double traversal for serializing and hashing.
-//! `borsh` is used for deterministic serialization, so every type that will
-//! get signed or hashed should derive `BorshSerialize`.
+//! This codebase chooses borsh as digest solution: a typed message's digest is
+//! computed by first serializing it into borsh's byte representation, then
+//! SHA256 on the bytes. This solution workarounds the need of implementing
+//! digest hashing on every message type, for which Rust community is currently
+//! lack of good auto-deriving solution.
+//!
+//! (The closest I can get is to derive `std::hash::Hash`, but that is believed
+//! to be a bad practice for security usage.)
 
 use std::ops::Deref;
 
@@ -29,22 +33,6 @@ pub struct Packet {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub struct Signature([u8; 64]);
-
-// impl BorshSerialize for Packet {
-//     fn serialize<W: std::io::Write>(&self, writer: &mut W) -> std::io::Result<()> {
-//         self.signature.serialize(writer)?;
-//         writer.write_all(&self.inner)
-//     }
-// }
-
-// impl BorshDeserialize for Packet {
-//     fn deserialize_reader<R: std::io::Read>(reader: &mut R) -> std::io::Result<Self> {
-//         let signature = Signature::deserialize_reader(reader)?;
-//         let mut inner = Vec::new();
-//         reader.read_to_end(&mut inner)?;
-//         Ok(Self { signature, inner })
-//     }
-// }
 
 /// In-memory representation of `M`, equiped with a signature that may or may
 /// not be verified.
@@ -93,6 +81,12 @@ impl Packet {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Signer(secp256k1::SecretKey);
 
+impl From<secp256k1::SecretKey> for Signer {
+    fn from(value: secp256k1::SecretKey) -> Self {
+        Self(value)
+    }
+}
+
 impl Signer {
     pub fn new_hardcoded(index: usize) -> Self {
         let mut key = [0xcc; 32];
@@ -127,6 +121,12 @@ impl Signer {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Verifier(secp256k1::PublicKey);
+
+impl From<secp256k1::PublicKey> for Verifier {
+    fn from(value: secp256k1::PublicKey) -> Self {
+        Self(value)
+    }
+}
 
 impl Verifier {
     pub fn new_hardcoded(index: usize) -> Self {
