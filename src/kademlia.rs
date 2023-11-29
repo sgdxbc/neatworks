@@ -172,7 +172,7 @@ impl Buckets {
         distance(&self.center.id, location).leading_zeros() as _
     }
 
-    fn insert(&mut self, record: PeerRecord) {
+    pub fn insert(&mut self, record: PeerRecord) {
         let index = self.index(&record.id);
         let bucket = &mut self.distances[index];
         if bucket.len() == 20 {

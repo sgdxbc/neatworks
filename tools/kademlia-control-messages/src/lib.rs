@@ -1,7 +1,19 @@
+use std::net::IpAddr;
+
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 
-pub struct Peer {
-    //
+pub struct Config {
+    pub seed: u64,
+    pub num_host_peer: usize,
+    pub hosts: Vec<IpAddr>,
+    pub index: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FindPeer {
+    pub index: usize,
+    pub target: [u8; 32],
+    pub count: usize,
 }

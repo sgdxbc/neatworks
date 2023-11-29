@@ -110,10 +110,7 @@ async fn run_client_internal(
             match config.protocol {
                 messages::Protocol::Unreplicated => {
                     let (event, source) = event_channel();
-                    spawner.spawn({
-                        let socket = socket.clone();
-                        async move { socket.listen_session::<unreplicated::Reply>(event).await }
-                    });
+                    spawner.spawn(socket.clone().listen_session::<unreplicated::Reply>(event));
                     client_sessions.push(spawner.spawn(unreplicated::client_session(
                         client.into(),
                         invoke_source,
@@ -123,10 +120,7 @@ async fn run_client_internal(
                 }
                 messages::Protocol::Pbft => {
                     let (event, source) = event_channel();
-                    spawner.spawn({
-                        let socket = socket.clone();
-                        async move { socket.listen_session::<pbft::Reply>(event).await }
-                    });
+                    spawner.spawn(socket.clone().listen_session::<pbft::Reply>(event));
                     client_sessions.push(spawner.spawn(pbft::client_session(
                         client.into(),
                         invoke_source,
@@ -237,14 +231,11 @@ async fn run_replica_internal(
         match config.protocol {
             messages::Protocol::Unreplicated => {
                 let (listen_event, listen_source) = event_channel();
-                spawner.spawn({
-                    let socket = socket.clone();
-                    async move {
-                        socket
-                            .listen_session::<unreplicated::Request>(listen_event)
-                            .await
-                    }
-                });
+                spawner.spawn(
+                    socket
+                        .clone()
+                        .listen_session::<unreplicated::Request>(listen_event),
+                );
                 spawner.spawn(unreplicated::replica_session(
                     replica.into(),
                     listen_source,
@@ -253,10 +244,11 @@ async fn run_replica_internal(
             }
             messages::Protocol::Pbft => {
                 let (listen_event, listen_source) = event_channel();
-                spawner.spawn({
-                    let socket = socket.clone();
-                    async move { socket.listen_session::<pbft::ToReplica>(listen_event).await }
-                });
+                spawner.spawn(
+                    socket
+                        .clone()
+                        .listen_session::<pbft::ToReplica>(listen_event),
+                );
                 spawner.spawn(pbft::replica_session(
                     replica.into(),
                     listen_source,

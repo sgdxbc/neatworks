@@ -19,7 +19,7 @@ impl UdpSocket {
         Ok(Self(Arc::new(tokio::net::UdpSocket::bind(addr).await?)))
     }
 
-    pub async fn listen_session<M>(&self, event: EventSender<(Addr, M)>) -> crate::Result<()>
+    pub async fn listen_session<M>(self, event: EventSender<(Addr, M)>) -> crate::Result<()>
     where
         M: BorshDeserialize + Send + 'static,
     {
