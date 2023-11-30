@@ -27,7 +27,7 @@ impl UdpSocket {
         loop {
             let (len, remote) = tokio::select! {
                 recv_from = self.0.recv_from(&mut buf) => recv_from?,
-                () = event.closed() => break Ok(()),
+                () = event.0.closed() => break Ok(()),
             };
             let send = event.send((Addr::Socket(remote), borsh::from_slice::<M>(&buf[..len])?));
             if send.is_err() {

@@ -1,5 +1,5 @@
 #[derive(Debug)]
-pub struct EventSource<M>(tokio::sync::mpsc::UnboundedReceiver<M>);
+pub struct EventSource<M>(pub tokio::sync::mpsc::UnboundedReceiver<M>);
 
 impl<M> EventSource<M> {
     pub async fn next(&mut self) -> crate::Result<M> {
@@ -28,10 +28,6 @@ impl<M> EventSender<M> {
         self.0
             .send(message)
             .map_err(|_| crate::err!("unexpected event channel closing"))
-    }
-
-    pub async fn closed(&self) {
-        self.0.closed().await
     }
 }
 

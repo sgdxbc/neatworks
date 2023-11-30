@@ -149,7 +149,7 @@ async fn find_session(
     loop {
         let (peer_id, message) = tokio::select! {
             result = submit_sessions.join_next() => result.unwrap()?,
-            () = event.closed() => break,
+            () = event.0.closed() => break,
         };
         assert!(contacting.remove(&peer_id));
         contacted.insert(peer_id);

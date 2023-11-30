@@ -4,14 +4,14 @@ use std::{
 };
 
 use axum::{
-    extract::State,
+    extract::{Path, State},
     response::IntoResponse,
     routing::{get, post},
     Json, Router,
 };
 
 use helloween::{
-    channel::SubscribeSource,
+    channel::{EventSource, SubscribeSource},
     crypto::{Signer, Verifier},
     event_channel,
     kademlia::{self, Buckets, Location, Peer, PeerRecord},
@@ -38,6 +38,7 @@ async fn main() -> helloween::Result<()> {
         .route("/ok", get(|| async {}))
         .route("/run-peer", post(run_peer))
         .route("/find-peer", post(find_peer))
+        .route("/find-peer/:id", get(poll_find_peer))
         .with_state(app.into());
     let signal_task = tokio::spawn({
         let shutdown = shutdown.clone();
@@ -64,8 +65,8 @@ async fn main() -> helloween::Result<()> {
 #[derive(Default)]
 struct AppState {
     shutdown: CancellationToken,
-    session: Mutex<Option<JoinHandle<()>>>,
-    subscribe_handles: Mutex<Vec<SubscribeHandle>>,
+    session: Mutex<Option<(JoinHandle<()>, SubscribeHandle)>>,
+    sources: Mutex<Vec<EventSource<Vec<PeerRecord>>>>,
 }
 
 type SubscribeHandle = helloween::channel::SubscribeHandle<(Location, usize), Vec<PeerRecord>>;
@@ -74,28 +75,22 @@ type App = State<Arc<AppState>>;
 async fn run_peer(State(state): App, Json(payload): Json<messages::Config>) {
     let mut session = state.session.lock().unwrap();
     assert!(session.is_none());
-    let mut subcribe_handles = state.subscribe_handles.lock().unwrap();
-    assert!(subcribe_handles.is_empty());
-    let (handles, sources) = repeat_with(event_channel)
-        .take(payload.num_host_peer)
-        .unzip::<_, _, Vec<_>, Vec<_>>();
-    *subcribe_handles = handles;
-    *session = Some(tokio::spawn(run_peer_interal(
-        payload,
-        sources,
-        state.shutdown.clone(),
-    )))
+    let (handle, source) = event_channel();
+    *session = Some((
+        tokio::spawn(run_peer_interal(payload, source, state.shutdown.clone())),
+        handle,
+    ))
 }
 
 async fn run_peer_interal(
     config: messages::Config,
-    sources: Vec<SubscribeSource<(Location, usize), Vec<PeerRecord>>>,
+    source: SubscribeSource<(Location, usize), Vec<PeerRecord>>,
     shutdown: CancellationToken,
 ) {
     if let Err(err) = async {
         let mut rng = StdRng::seed_from_u64(config.seed);
         let mut records = Vec::new();
-        let mut run_signers = Vec::new();
+        let mut signer = None;
         for (i, host) in config.hosts.iter().enumerate() {
             let host_signers = repeat_with(|| {
                 let (secret_key, _) = secp256k1::generate_keypair(&mut rng);
@@ -112,40 +107,39 @@ async fn run_peer_interal(
                     })
                     .collect::<helloween::Result<Vec<_>>>()?,
             );
-            if i == config.index {
-                run_signers = host_signers.clone();
+            if i == config.index.0 {
+                signer = Some(host_signers[config.index.1])
             }
         }
+        let signer = signer.unwrap();
 
-        let host = config.hosts[config.index];
+        let host = config.hosts[config.index.0];
         let mut rng = repeat_with(|| StdRng::from_seed(rng.gen()))
-            .nth(config.index)
+            .nth(config.index.0 * config.num_host_peer + config.index.1)
             .unwrap();
         let monitor = BackgroundMonitor::default();
         let spawner = monitor.spawner();
-        for ((i, signer), subscribe_source) in run_signers.into_iter().enumerate().zip(sources) {
-            let addr = Addr::Socket((host, 20000 + i as u16).into());
-            let mut buckets = Buckets::new(PeerRecord::new(&signer, addr.clone())?);
-            records.shuffle(&mut rng);
-            for record in &records {
-                buckets.insert(record.clone())
-            }
-            let peer = Peer {
-                verifier: Verifier::from(&signer),
-                signer: signer.into(),
-                spawner: spawner.clone(),
-            };
-            let (message_event, message_source) = event_channel();
-            let socket = UdpSocket::bind(addr).await?;
-            spawner.spawn(socket.clone().listen_session(message_event));
-            spawner.spawn(kademlia::session(
-                peer.into(),
-                buckets,
-                subscribe_source,
-                message_source,
-                socket.into_transport::<kademlia::Message>(),
-            ));
+        let addr = Addr::Socket((host, 20000 + config.index.1 as u16).into());
+        let mut buckets = Buckets::new(PeerRecord::new(&signer, addr.clone())?);
+        records.shuffle(&mut rng);
+        for record in &records {
+            buckets.insert(record.clone())
         }
+        let peer = Peer {
+            verifier: Verifier::from(&signer),
+            signer: signer.into(),
+            spawner: spawner.clone(),
+        };
+        let (message_event, message_source) = event_channel();
+        let socket = UdpSocket::bind(addr).await?;
+        spawner.spawn(socket.clone().listen_session(message_event));
+        spawner.spawn(kademlia::session(
+            peer.into(),
+            buckets,
+            source,
+            message_source,
+            socket.into_transport::<kademlia::Message>(),
+        ));
         drop(spawner);
         monitor.wait().await?;
         Ok::<_, helloween::Error>(())
@@ -162,26 +156,42 @@ async fn find_peer(
     State(state): App,
     Json(payload): Json<messages::FindPeer>,
 ) -> impl IntoResponse {
-    let mut source = {
-        let subscribe_handles = state.subscribe_handles.lock().unwrap();
-        subscribe_handles[payload.index]
-            .subscribe((payload.target, payload.count))
-            .unwrap()
-    };
+    let source = state
+        .session
+        .lock()
+        .unwrap()
+        .as_ref()
+        .unwrap()
+        .1
+        .subscribe((payload.target, payload.count))
+        .unwrap();
+    let mut sources = state.sources.lock().unwrap();
+    let id = sources.len();
+    sources.push(source);
+    Json(id)
+}
 
-    let mut collected = Vec::new();
-    while let Some(result) = source.option_next().await {
-        collected.push(
-            result
-                .into_iter()
-                .map(|record| {
-                    let Addr::Socket(addr) = record.addr else {
-                        unimplemented!()
-                    };
-                    (record.id, addr)
-                })
-                .collect::<Vec<_>>(),
-        );
-    }
-    Json(collected)
+async fn poll_find_peer(State(state): App, Path(id): Path<usize>) -> impl IntoResponse {
+    let source = &mut state.sources.lock().unwrap()[id];
+    let mut messages = Vec::new();
+    let err = loop {
+        match source.0.try_recv() {
+            Ok(message) => messages.push(
+                message
+                    .into_iter()
+                    .map(|record| {
+                        let Addr::Socket(addr) = record.addr else {
+                            unimplemented!()
+                        };
+                        (record.id, addr)
+                    })
+                    .collect::<Vec<_>>(),
+            ),
+            Err(err) => break (err),
+        }
+    };
+    Json((
+        messages,
+        matches!(err, tokio::sync::mpsc::error::TryRecvError::Disconnected),
+    ))
 }
