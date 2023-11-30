@@ -1,7 +1,6 @@
 use std::{
     iter::repeat_with,
     sync::{Arc, Mutex},
-    time::Duration,
 };
 
 use axum::{
@@ -126,10 +125,7 @@ async fn run_peer_interal(
         let spawner = monitor.spawner();
         for ((i, signer), subscribe_source) in run_signers.into_iter().enumerate().zip(sources) {
             let addr = Addr::Socket((host, 20000 + i as u16).into());
-            let mut buckets = Buckets::new(
-                PeerRecord::new(&signer, addr.clone())?,
-                Duration::from_secs(30),
-            );
+            let mut buckets = Buckets::new(PeerRecord::new(&signer, addr.clone())?);
             records.shuffle(&mut rng);
             for record in &records {
                 buckets.insert(record.clone())
@@ -147,7 +143,6 @@ async fn run_peer_interal(
                 buckets,
                 subscribe_source,
                 message_source,
-                spawner.clone(),
                 socket.into_transport::<kademlia::Message>(),
             ));
         }
