@@ -11,11 +11,12 @@ use axum::{
 };
 
 use halloween::{
-    channel::{EventSource, SubscribeSource},
+    channel::{EventSource, PromiseSender, SubscribeSource},
     crypto::{Signer, Verifier},
     event_channel,
     kademlia::{self, Buckets, Location, Peer, PeerRecord},
     net::UdpSocket,
+    promise_channel,
     task::BackgroundMonitor,
     transport::Addr,
 };
@@ -72,20 +73,34 @@ struct AppState {
 type SubscribeHandle = halloween::channel::SubscribeHandle<(Location, usize), Vec<PeerRecord>>;
 type App = State<Arc<AppState>>;
 
-async fn run_peer(State(state): App, Json(payload): Json<messages::Config>) {
-    let mut session = state.session.lock().unwrap();
-    assert!(session.is_none());
-    let (handle, source) = event_channel();
-    *session = Some((
-        tokio::spawn(run_peer_interal(payload, source, state.shutdown.clone())),
-        handle,
-    ))
+async fn run_peer(State(state): App, Json(payload): Json<messages::Config>) -> impl IntoResponse {
+    let (record, promise_record) = promise_channel();
+    {
+        let mut session = state.session.lock().unwrap();
+        assert!(session.is_none());
+        let (handle, source) = event_channel();
+        *session = Some((
+            tokio::spawn(run_peer_interal(
+                payload,
+                source,
+                state.shutdown.clone(),
+                record,
+            )),
+            handle,
+        ))
+    }
+    let record = promise_record.await.unwrap();
+    let Addr::Socket(addr) = record.addr else {
+        unimplemented!()
+    };
+    Json((record.id, addr))
 }
 
 async fn run_peer_interal(
     config: messages::Config,
     source: SubscribeSource<(Location, usize), Vec<PeerRecord>>,
     shutdown: CancellationToken,
+    record: PromiseSender<PeerRecord>,
 ) {
     if let Err(err) = async {
         let mut rng = StdRng::seed_from_u64(config.seed);
@@ -120,9 +135,14 @@ async fn run_peer_interal(
         let monitor = BackgroundMonitor::default();
         let spawner = monitor.spawner();
         let addr = Addr::Socket((host, 20000 + config.index.1 as u16).into());
-        let mut buckets = Buckets::new(PeerRecord::new(&signer, addr.clone())?);
+        let run_record = PeerRecord::new(&signer, addr.clone())?;
+        record.resolve(run_record.clone())?;
+        let mut buckets = Buckets::new(run_record.clone());
         records.shuffle(&mut rng);
         for record in &records {
+            if record.id == run_record.id {
+                continue;
+            }
             buckets.insert(record.clone())
         }
         let peer = Peer {
