@@ -10,7 +10,7 @@ use axum::{
     routing::{get, post},
     Json, Router,
 };
-use helloween::{
+use halloween::{
     app::{null_session, NullWorkload},
     crypto::{Signer, Verifier},
     event_channel,
@@ -30,7 +30,7 @@ use tokio::{
 use tokio_util::sync::CancellationToken;
 
 #[tokio::main]
-async fn main() -> helloween::Result<()> {
+async fn main() -> halloween::Result<()> {
     std::env::set_var("RUST_BACKTRACE", "1");
     let port = std::env::args()
         .nth(1)
@@ -143,7 +143,7 @@ async fn run_client_internal(
             while let Some(result) = close_loop_sessions.join_next().await {
                 latencies.extend(result??)
             }
-            Ok::<_, helloween::Error>((
+            Ok::<_, halloween::Error>((
                 latencies.len() as f32 / 10.,
                 latencies.iter().sum::<Duration>() / latencies.len() as _,
             ))
@@ -158,7 +158,7 @@ async fn run_client_internal(
         }
         stop_listen.cancel();
         timeout(Duration::from_millis(100), monitor.wait()).await??;
-        Ok::<_, helloween::Error>(result)
+        Ok::<_, halloween::Error>(result)
     }
     .await
     {
@@ -261,7 +261,7 @@ async fn run_replica_internal(
         monitor.wait_task(reset.cancelled()).await?;
         stop.cancel();
         timeout(Duration::from_millis(100), monitor.wait()).await??;
-        Ok::<_, helloween::Error>(())
+        Ok::<_, halloween::Error>(())
     }
     .await
     {

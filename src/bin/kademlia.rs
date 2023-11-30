@@ -10,7 +10,7 @@ use axum::{
     Json, Router,
 };
 
-use helloween::{
+use halloween::{
     channel::{EventSource, SubscribeSource},
     crypto::{Signer, Verifier},
     event_channel,
@@ -25,7 +25,7 @@ use tokio::{net::TcpListener, task::JoinHandle};
 use tokio_util::sync::CancellationToken;
 
 #[tokio::main]
-async fn main() -> helloween::Result<()> {
+async fn main() -> halloween::Result<()> {
     std::env::set_var("RUST_BACKTRACE", "1");
     let port = std::env::args()
         .nth(1)
@@ -69,7 +69,7 @@ struct AppState {
     sources: Mutex<Vec<EventSource<Vec<PeerRecord>>>>,
 }
 
-type SubscribeHandle = helloween::channel::SubscribeHandle<(Location, usize), Vec<PeerRecord>>;
+type SubscribeHandle = halloween::channel::SubscribeHandle<(Location, usize), Vec<PeerRecord>>;
 type App = State<Arc<AppState>>;
 
 async fn run_peer(State(state): App, Json(payload): Json<messages::Config>) {
@@ -105,7 +105,7 @@ async fn run_peer_interal(
                     .map(|(i, signer)| {
                         PeerRecord::new(signer, Addr::Socket((*host, 20000 + i as u16).into()))
                     })
-                    .collect::<helloween::Result<Vec<_>>>()?,
+                    .collect::<halloween::Result<Vec<_>>>()?,
             );
             if i == config.index.0 {
                 signer = Some(host_signers[config.index.1])
@@ -142,7 +142,7 @@ async fn run_peer_interal(
         ));
         drop(spawner);
         monitor.wait().await?;
-        Ok::<_, helloween::Error>(())
+        Ok::<_, halloween::Error>(())
     }
     .await
     {
