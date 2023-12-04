@@ -295,6 +295,8 @@ impl Buckets {
         let mut records = Vec::new();
         let index = self.index(target);
         let center_distance = distance(&self.center.id, target);
+        // look up order derived from libp2p::kad, personally i don't understand why this works
+        // notice that bucket index here is reversed to libp2p's, i.e. libp2p_to_this(i) = 255 - i
         for index in (index..U256::BITS as _)
             .filter(|i| center_distance >> (U256::BITS - 1 - *i as u32) & 1 == 1)
             .chain(
@@ -470,5 +472,36 @@ pub async fn session(
                 buckets.remove(&id);
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn ordered_closest() -> crate::Result<()> {
+        let (secret_key, _) = secp256k1::generate_keypair(&mut rand::thread_rng());
+        let center = PeerRecord::new(&Signer::from(secret_key), Addr::Untyped(Default::default()))?;
+        let mut buckets = Buckets::new(center);
+        for _ in 0..1000 {
+            let (secret_key, _) = secp256k1::generate_keypair(&mut rand::thread_rng());
+            buckets.insert(PeerRecord::new(
+                &Signer::from(secret_key),
+                Addr::Untyped(Default::default()),
+            )?)
+        }
+        for _ in 0..1000 {
+            let records = buckets.find_closest(&rand::random(), 20);
+            assert_eq!(records.len(), 20)
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn ordered_closest_100() -> crate::Result<()> {
+        for _ in 0..100 {
+            ordered_closest()?
+        }
+        Ok(())
     }
 }

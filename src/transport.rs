@@ -9,12 +9,22 @@
 //! sub-sessions, and define its on-wire message format as:
 //!
 //! ```rust
-//! #[derive(From)]
 //! enum AMessage {
 //!     B(BMessage),
 //!     C(CMessage),
 //!     // other variants that produced by A itself
 //! }
+//! 
+//! struct BMessage { /* ... */ }
+//! struct CMessage { /* ... */ }
+//!
+//! impl From<BMessage> for AMessage {
+//!     fn from(value: BMessage) -> Self {
+//!         Self::B(value)
+//!     }
+//! }
+//!
+//! // same for CMessage
 //! ```
 //!
 //! Then a `UdpTransport<AMessage>` implements both `Transport<BMessage>` and
