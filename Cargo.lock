@@ -656,6 +656,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "kademlia-control"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "kademlia-control-messages",
+ "reqwest",
+ "tokio",
+ "tokio-util",
+]
+
+[[package]]
 name = "kademlia-control-messages"
 version = "0.1.0"
 dependencies = [

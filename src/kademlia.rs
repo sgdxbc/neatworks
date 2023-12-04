@@ -137,6 +137,7 @@ async fn find_session(
         contacting.insert(id);
         destinations.push(addr)
     }
+    assert!(!destinations.is_empty());
     // due to the nature of asynchronous spawning above, there's chance that message has been
     // broadcast here, replies has been received, verified and dropped by main session (see below),
     // and `handle.submit` finally submitted
@@ -233,7 +234,7 @@ impl Buckets {
     pub fn new(center: PeerRecord) -> Self {
         Self {
             center,
-            distances: vec![Default::default(); 255],
+            distances: vec![Default::default(); 256],
         }
     }
 
@@ -259,7 +260,7 @@ impl Buckets {
         }
 
         // repeat on cached entries, only shifting on a full cache
-        // this is surprisingly duplicated
+        // this is surprisingly duplicated code to the above
         if let Some(bucket_index) = bucket
             .cached_records
             .iter()
@@ -293,14 +294,35 @@ impl Buckets {
     fn find_closest(&self, target: &Location, count: usize) -> Vec<PeerRecord> {
         let mut records = Vec::new();
         let index = self.index(target);
-        for index in (index..U256::BITS as _).chain((0..index).rev()) {
+        let center_distance = distance(&self.center.id, target);
+        for index in (index..U256::BITS as _)
+            .filter(|i| center_distance >> (U256::BITS - 1 - *i as u32) & 1 == 1)
+            .chain(
+                (0..U256::BITS as _)
+                    .rev()
+                    .filter(|i| center_distance >> (U256::BITS - 1 - *i as u32) & 1 == 0),
+            )
+        {
             let mut index_records = self.distances[index].records.clone();
-            index_records.sort_unstable_by_key(|record| distance(&record.id, target));
+            // if !index_records.is_empty() {
+            //     println!("{index}")
+            // }
+
             // ensure center peer is included if it is indeed close enough
             // can it be more elegant?
             if index == U256::BITS as usize - 1 {
                 index_records.push(self.center.clone())
             }
+            index_records.sort_unstable_by_key(|record| distance(&record.id, target));
+
+            // for record in &index_records {
+            //     println!(
+            //         "{:02x?} distance {} log(distance) {}",
+            //         record.id,
+            //         distance(&record.id, target),
+            //         U256::BITS - distance(&record.id, target).leading_zeros()
+            //     )
+            // }
             records.extend(index_records.into_iter().take(count - records.len()));
             assert!(records.len() <= count);
             if records.len() == count {
@@ -364,7 +386,7 @@ pub async fn session(
                     peer.clone(),
                     target,
                     count,
-                    buckets.find_closest(&target, count),
+                    buckets.find_closest(&target, count.max(3)),
                     submit_handle.clone(),
                     event,
                     transport.clone(),
