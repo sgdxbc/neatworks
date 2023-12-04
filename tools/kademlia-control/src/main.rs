@@ -1,6 +1,6 @@
-use std::{collections::HashMap, net::SocketAddr, sync::OnceLock, time::Duration};
+use std::{net::SocketAddr, sync::OnceLock, time::Duration};
 
-use kademlia_control_messages::{Config, FindPeer};
+use kademlia_control_messages::{Config, FindPeer, Peer};
 use tokio::{
     task::JoinSet,
     time::{sleep, timeout},
@@ -83,7 +83,7 @@ async fn session() -> anyhow::Result<()> {
     ];
     let mut peer_sessions = JoinSet::new();
     let shutdown = CancellationToken::new();
-    let mut peer_addrs = HashMap::new();
+    let mut peers = Vec::new();
     for (i, url) in urls.into_iter().enumerate() {
         let config = Config {
             seed: 117418,
@@ -91,26 +91,26 @@ async fn session() -> anyhow::Result<()> {
             hosts: vec![[127, 0, 0, 1].into()],
             index: (0, i),
         };
-        let (id, addr) = client
+        let peer = client
             .post(format!("{url}/run-peer"))
             .json(&config)
             .send()
             .await?
             .error_for_status()?
-            .json::<([u8; 32], SocketAddr)>()
+            .json::<Peer>()
             .await?;
-        println!("peer {} {addr}", hex_string(&id));
-        peer_addrs.insert(id, addr);
+        println!("peer {} {}", hex_string(&peer.id), peer.addr);
+        peers.push(peer);
         peer_sessions.spawn(peer_session(url.into(), shutdown.clone()));
     }
 
-    for (id, addr) in peer_addrs {
+    for peer in peers {
         let find_peer = FindPeer {
-            target: id,
+            target: peer.id,
             count: 1,
         };
         for url in urls {
-            println!("find {}({addr}) on {url}", hex_string(&id));
+            println!("find {}({}) on {url}", hex_string(&peer.id), peer.addr);
             let task = async {
                 find_session(url.into(), find_peer.clone()).await?;
                 sleep(Duration::from_secs(1)).await;

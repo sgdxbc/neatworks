@@ -3,6 +3,7 @@ use halloween::{
     crypto::Packet,
     kademlia::{self, Location, PeerId},
     transport::Addr,
+    Result,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
@@ -39,4 +40,8 @@ pub struct SendFragment {
 struct Query {
     chunk: Location,
     id: PeerId,
+}
+
+pub async fn put_session(data: &[u8]) -> crate::Result<Vec<Location>> {
+    Ok(Default::default())
 }

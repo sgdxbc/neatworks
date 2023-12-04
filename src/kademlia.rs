@@ -29,6 +29,10 @@ fn distance(id: &PeerId, target: &Location) -> U256 {
     U256::from_le_bytes(*id) ^ U256::from_le_bytes(*target)
 }
 
+fn distance_from(id: &PeerId, distance: U256) -> Location {
+    (U256::from_le_bytes(*id) ^ distance).to_le_bytes()
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub enum Message {
     FindPeer(Packet),
@@ -88,6 +92,31 @@ impl PeerRecord {
             verifier,
             addr,
         })
+    }
+}
+
+impl TryFrom<kademlia_control_messages::Peer> for PeerRecord {
+    type Error = crate::Error;
+
+    fn try_from(value: kademlia_control_messages::Peer) -> Result<Self, Self::Error> {
+        Ok(Self {
+            id: value.id,
+            verifier: Verifier::from(secp256k1::PublicKey::from_slice(&value.key)?),
+            addr: Addr::Socket(value.addr),
+        })
+    }
+}
+
+impl From<PeerRecord> for kademlia_control_messages::Peer {
+    fn from(value: PeerRecord) -> Self {
+        let Addr::Socket(addr) = value.addr else {
+            unimplemented!()
+        };
+        Self {
+            id: value.id,
+            key: value.verifier.0.serialize().into(),
+            addr,
+        }
     }
 }
 
@@ -340,9 +369,9 @@ impl Buckets {
 
 pub async fn session(
     peer: Arc<Peer>,
-    mut buckets: Buckets,
+    buckets: &mut Buckets,
     mut subscribe_source: SubscribeSource<(Location, usize), Vec<PeerRecord>>,
-    mut message_source: EventSource<(Addr, Message)>,
+    message_source: &mut EventSource<(Addr, Message)>,
     transport: impl Transport<Message>,
 ) -> crate::Result<()> {
     let mut verify_find_peer_sessions = JoinSet::new();
@@ -475,9 +504,44 @@ pub async fn session(
     }
 }
 
+pub async fn bootstrap_session(
+    peer: Arc<Peer>,
+    buckets: &mut Buckets,
+    message_source: &mut EventSource<(Addr, Message)>,
+    transport: impl Transport<Message>,
+) -> crate::Result<()> {
+    let peer_id = peer_id(&peer.verifier)?;
+    let (handle, source) = event_channel();
+    let _event = handle.subscribe((peer_id, 20))?;
+    drop(handle);
+    session(
+        peer.clone(),
+        buckets,
+        source,
+        message_source,
+        transport.clone(),
+    )
+    .await?;
+    let (handle, source) = event_channel();
+    let mut events = Vec::new();
+    for i in 0..U256::BITS - 1 {
+        let d = (U256::from_le_bytes(rand::random()) | U256::ONE << (U256::BITS - 1)) >> i;
+        events.push(handle.subscribe((distance_from(&peer_id, d), 20))?)
+    }
+    drop(handle);
+    session(peer, buckets, source, message_source, transport).await
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn distance_inversion() {
+        let id = rand::random::<PeerId>();
+        let d = U256::from_le_bytes(rand::random());
+        assert_eq!(distance(&id, &distance_from(&id, d)), d);
+    }
 
     fn ordered_closest() -> crate::Result<()> {
         let (secret_key, _) = secp256k1::generate_keypair(&mut rand::thread_rng());
