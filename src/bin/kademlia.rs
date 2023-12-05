@@ -148,8 +148,8 @@ async fn run_peer(State(state): App, Json(config): Json<messages::Config>) -> im
     }
     .await
     .unwrap_or_else(|err| {
-        println!("{err}");
-        println!("{}", err.backtrace());
+        eprintln!("{err}");
+        eprintln!("{}", err.backtrace());
         state.shutdown.cancel();
         panic!()
     })

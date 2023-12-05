@@ -344,25 +344,12 @@ impl Buckets {
             )
         {
             let mut index_records = self.distances[index].records.clone();
-            // if !index_records.is_empty() {
-            //     println!("{index}")
-            // }
-
             // ensure center peer is included if it is indeed close enough
             // can it be more elegant?
             if index == U256::BITS as usize - 1 {
                 index_records.push(self.center.clone())
             }
             index_records.sort_unstable_by_key(|record| distance(&record.id, target));
-
-            // for record in &index_records {
-            //     println!(
-            //         "{:02x?} distance {} log(distance) {}",
-            //         record.id,
-            //         distance(&record.id, target),
-            //         U256::BITS - distance(&record.id, target).leading_zeros()
-            //     )
-            // }
             records.extend(index_records.into_iter().take(count - records.len()));
             assert!(records.len() <= count);
             if records.len() == count {
@@ -441,23 +428,11 @@ pub async fn session(
                     hex_string(&id),
                     hex_string(&target)
                 );
-                // println!("{} {} submit", hex_string(&id), hex_string(&target));
                 let timeout_event = timeout_event.clone();
                 peer.spawner.spawn(async move {
                     match timeout(Duration::from_secs(1), promise_message).await {
-                        Ok(message) => {
-                            // println!(
-                            //     "{} {} resolved {}",
-                            //     hex_string(&id),
-                            //     hex_string(&target),
-                            //     message.is_ok()
-                            // );
-                            result.resolve(message?)
-                        }
-                        Err(_) => {
-                            // println!("{} {} timeout", hex_string(&id), hex_string(&target));
-                            timeout_event.send((target, id))
-                        }
+                        Ok(message) => result.resolve(message?),
+                        Err(_) => timeout_event.send((target, id)),
                     }
                 });
             }

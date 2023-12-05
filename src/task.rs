@@ -100,7 +100,7 @@ impl BackgroundMonitor {
         }
         if let Some(err) = channel_err {
             tokio::time::sleep(std::time::Duration::from_millis(200)).await;
-            println!("postponed reporting channel error");
+            eprintln!("postponed reporting channel error");
             Err(err)
         } else {
             Ok(())

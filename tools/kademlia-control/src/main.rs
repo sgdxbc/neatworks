@@ -151,26 +151,31 @@ async fn session() -> anyhow::Result<()> {
     );
     peer_sessions.spawn(peer_session(url.into(), shutdown.clone()));
 
-    // let find_peer = FindPeer {
-    //     target: boostrap_peer.id,
-    //     count: 1,
-    // };
-    // for url in urls {
-    //     println!(
-    //         "find {}({}) on {url}",
-    //         hex_string(&boostrap_peer.id),
-    //         boostrap_peer.addr
-    //     );
-    //     let task = async {
-    //         find_session(url.into(), find_peer.clone()).await?;
-    //         sleep(Duration::from_secs(1)).await;
-    //         Ok::<_, anyhow::Error>(())
-    //     };
-    //     tokio::select! {
-    //         result = task => result?,
-    //         result = peer_sessions.join_next() => result.unwrap()??,
-    //     }
-    // }
+    let find_peer = FindPeer {
+        target: boostrap_peer.id,
+        count: 1,
+    };
+    let mut tasks = JoinSet::new();
+    for url in urls {
+        println!(
+            "find {}({}) on {url}",
+            hex_string(&boostrap_peer.id),
+            boostrap_peer.addr
+        );
+        let find_peer = find_peer.clone();
+        let task = async move {
+            find_session(url.into(), find_peer).await?;
+            sleep(Duration::from_secs(1)).await;
+            Ok::<_, anyhow::Error>(())
+        };
+        tasks.spawn(task);
+    }
+    while let Some(result) = tokio::select! {
+        result = tasks.join_next() => result,
+        result = peer_sessions.join_next() => return result.unwrap().map_err(Into::into).and_then(identity),
+    } {
+        result??
+    }
 
     shutdown.cancel();
     while let Some(result) = peer_sessions.join_next().await {
