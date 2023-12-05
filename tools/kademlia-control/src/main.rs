@@ -84,10 +84,10 @@ async fn session() -> anyhow::Result<()> {
     let mut peer_sessions = JoinSet::new();
     let shutdown = CancellationToken::new();
     let mut peers = Vec::new();
-    for (i, url) in urls.into_iter().enumerate() {
+    for (i, url) in urls.into_iter().enumerate().take(3) {
         let config = Config {
             seed: 117418,
-            num_host_peer: 4,
+            num_host_peer: 3,
             hosts: vec![[127, 0, 0, 1].into()],
             index: (0, i),
         };
@@ -104,22 +104,60 @@ async fn session() -> anyhow::Result<()> {
         peer_sessions.spawn(peer_session(url.into(), shutdown.clone()));
     }
 
-    for peer in peers {
-        let find_peer = FindPeer {
-            target: peer.id,
-            count: 1,
+    // for peer in &peers {
+    //     let find_peer = FindPeer {
+    //         target: peer.id,
+    //         count: 1,
+    //     };
+    //     for url in urls.into_iter().take(3) {
+    //         println!("find {}({}) on {url}", hex_string(&peer.id), peer.addr);
+    //         let task = async {
+    //             find_session(url.into(), find_peer.clone()).await?;
+    //             sleep(Duration::from_secs(1)).await;
+    //             Ok::<_, anyhow::Error>(())
+    //         };
+    //         tokio::select! {
+    //             result = task => result?,
+    //             result = peer_sessions.join_next() => result.unwrap()??,
+    //         }
+    //     }
+    // }
+
+    let url = urls[3];
+    println!("boostrap peer on {url}");
+    let boostrap_peer = client
+        .post(format!("{url}/bootstrap-peer"))
+        .json(&peers[0])
+        .send()
+        .await?
+        .error_for_status()?
+        .json::<Peer>()
+        .await?;
+    println!(
+        "peer {} {}",
+        hex_string(&boostrap_peer.id),
+        boostrap_peer.addr
+    );
+    peer_sessions.spawn(peer_session(url.into(), shutdown.clone()));
+
+    let find_peer = FindPeer {
+        target: boostrap_peer.id,
+        count: 1,
+    };
+    for url in urls {
+        println!(
+            "find {}({}) on {url}",
+            hex_string(&boostrap_peer.id),
+            boostrap_peer.addr
+        );
+        let task = async {
+            find_session(url.into(), find_peer.clone()).await?;
+            sleep(Duration::from_secs(1)).await;
+            Ok::<_, anyhow::Error>(())
         };
-        for url in urls {
-            println!("find {}({}) on {url}", hex_string(&peer.id), peer.addr);
-            let task = async {
-                find_session(url.into(), find_peer.clone()).await?;
-                sleep(Duration::from_secs(1)).await;
-                Ok::<_, anyhow::Error>(())
-            };
-            tokio::select! {
-                result = task => result?,
-                result = peer_sessions.join_next() => result.unwrap()??,
-            }
+        tokio::select! {
+            result = task => result?,
+            result = peer_sessions.join_next() => result.unwrap()??,
         }
     }
 

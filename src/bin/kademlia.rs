@@ -18,7 +18,6 @@ use halloween::{
     net::UdpSocket,
     task::BackgroundMonitor,
     transport::Addr,
-    Transport,
 };
 use kademlia_control_messages as messages;
 use rand::{rngs::StdRng, seq::SliceRandom, Rng, SeedableRng};
@@ -133,7 +132,7 @@ async fn run_peer(State(state): App, Json(config): Json<messages::Config>) -> im
                 &mut buckets,
                 subscribe_source,
                 &mut message_source,
-                socket.into_transport::<kademlia::Message>(),
+                socket,
             )
             .await
         });
@@ -170,16 +169,14 @@ async fn bootstrap_peer(
         let (secret_key, _) = secp256k1::generate_keypair(&mut rand::thread_rng());
         let signer = Signer::from(secret_key);
         let socket = UdpSocket::bind(Addr::Socket(([0, 0, 0, 0], 0).into())).await?;
-        let transport = socket.clone().into_transport::<kademlia::Message>();
-        let monitor = BackgroundMonitor::default();
+        let mut monitor = BackgroundMonitor::default();
         let (message_event, mut message_source) = event_channel();
-        monitor
-            .spawner()
-            .spawn(socket.listen_session::<kademlia::Message>(message_event));
-        let peer_record = PeerRecord::new(
-            &signer,
-            <_ as Transport<kademlia::Message>>::addr(&transport),
-        )?;
+        monitor.spawner().spawn(
+            socket
+                .clone()
+                .listen_session::<kademlia::Message>(message_event),
+        );
+        let peer_record = PeerRecord::new(&signer, Addr::Socket(socket.0.local_addr()?))?;
         let peer = Arc::new(Peer {
             verifier: Verifier::from(&signer),
             signer: signer.into(),
@@ -187,13 +184,14 @@ async fn bootstrap_peer(
         });
         let mut buckets = Buckets::new(peer_record.clone());
         buckets.insert(seed_peer.try_into()?);
-        kademlia::bootstrap_session(
-            peer.clone(),
-            &mut buckets,
-            &mut message_source,
-            transport.clone(),
-        )
-        .await?;
+        monitor
+            .wait_task(kademlia::bootstrap_session(
+                peer.clone(),
+                &mut buckets,
+                &mut message_source,
+                socket.clone(),
+            ))
+            .await??;
         let (subscribe_handle, subscribe_source) = event_channel();
         monitor.spawner().spawn(async move {
             kademlia::session(
@@ -201,7 +199,7 @@ async fn bootstrap_peer(
                 &mut buckets,
                 subscribe_source,
                 &mut message_source,
-                transport,
+                socket,
             )
             .await
         });

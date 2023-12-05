@@ -115,7 +115,7 @@ async fn run_client_internal(
                         client.into(),
                         invoke_source,
                         source,
-                        socket.into_transport::<unreplicated::Request>(),
+                        socket,
                     )));
                 }
                 messages::Protocol::Pbft => {
@@ -125,7 +125,7 @@ async fn run_client_internal(
                         client.into(),
                         invoke_source,
                         source,
-                        socket.into_transport::<pbft::ToReplica>(),
+                        socket,
                     )));
                 }
             }
@@ -239,7 +239,7 @@ async fn run_replica_internal(
                 spawner.spawn(unreplicated::replica_session(
                     replica.into(),
                     listen_source,
-                    socket.into_transport::<unreplicated::Reply>(),
+                    socket,
                 ));
             }
             messages::Protocol::Pbft => {
@@ -252,8 +252,8 @@ async fn run_replica_internal(
                 spawner.spawn(pbft::replica_session(
                     replica.into(),
                     listen_source,
-                    socket.clone().into_transport::<pbft::ToReplica>(),
-                    socket.into_transport::<pbft::Reply>(),
+                    socket.clone(),
+                    socket,
                 ));
             }
         }

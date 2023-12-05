@@ -188,12 +188,12 @@ async fn find_session(
                 if contacted.contains(&record.id) || contacting.contains(&record.id) {
                     continue;
                 }
-                let index = closest
-                    .binary_search_by_key(&distance(&record.id, &target), |record| {
-                        distance(&record.id, &target)
-                    })
-                    .unwrap_err();
-                closest.insert(index, record)
+                match closest.binary_search_by_key(&distance(&record.id, &target), |record| {
+                    distance(&record.id, &target)
+                }) {
+                    Ok(index) => assert_eq!(closest[index].verifier, record.verifier),
+                    Err(index) => closest.insert(index, record),
+                }
             }
         } else {
             let index = closest
@@ -225,10 +225,13 @@ async fn find_session(
         {
             break;
         }
-        if let Some(record) = closest
-            .iter()
-            .find(|record| !contacted.contains(&record.id) && !contacting.contains(&record.id))
-        {
+        while contacting.len() < 3 {
+            let Some(record) = closest
+                .iter()
+                .find(|record| !contacted.contains(&record.id) && !contacting.contains(&record.id))
+            else {
+                break;
+            };
             let id = record.id;
             let handle = handle.clone();
             submit_sessions.spawn(async move {
@@ -239,8 +242,10 @@ async fn find_session(
             transport
                 .send_to(record.addr.clone(), find_peer.clone())
                 .await?
-        };
+        }
+        assert!(!contacting.is_empty())
     }
+    drop(event);
     while let Some(result) = submit_sessions.join_next().await {
         result?;
     }
@@ -382,9 +387,8 @@ pub async fn session(
     let (timeout_event, mut timeout_source) = event_channel();
 
     loop {
-        type Subscribe = ((Location, usize), EventSender<Vec<PeerRecord>>);
         enum Select {
-            Subscribe(Subscribe),
+            Subscribe(((Location, usize), EventSender<Vec<PeerRecord>>)),
             Message((Addr, Message)),
             VerifiedFindPeer(crate::Result<(Addr, FindPeer)>),
             VerifiedFindPeerOk(crate::Result<(Addr, FindPeerOk)>),
@@ -430,7 +434,7 @@ pub async fn session(
                 peer.spawner.spawn(async move {
                     let Ok(message) = timeout(Duration::from_secs(1), promise_find_peer_ok).await
                     else {
-                        return timeout_event.send(target);
+                        return timeout_event.send(id);
                     };
                     result.resolve(message?)
                 });
