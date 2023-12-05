@@ -1,6 +1,6 @@
 use std::{net::SocketAddr, sync::OnceLock, time::Duration};
 
-use kademlia_control_messages::{Config, FindPeer, Peer};
+use kademlia_control_messages::{BootstrapConfig, Config, FindPeer, Peer};
 use tokio::{
     task::JoinSet,
     time::{sleep, timeout},
@@ -125,9 +125,13 @@ async fn session() -> anyhow::Result<()> {
 
     let url = urls[3];
     println!("boostrap peer on {url}");
+    let config = BootstrapConfig {
+        seed_peer: peers[0].clone(),
+        host: [127, 0, 0, 1].into(),
+    };
     let boostrap_peer = client
         .post(format!("{url}/bootstrap-peer"))
-        .json(&peers[0])
+        .json(&config)
         .send()
         .await?
         .error_for_status()?

@@ -12,6 +12,12 @@ pub struct Config {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BootstrapConfig {
+    pub seed_peer: Peer,
+    pub host: IpAddr,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Peer {
     pub id: [u8; 32],
     pub key: Vec<u8>,

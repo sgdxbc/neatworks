@@ -5,6 +5,8 @@ use tokio::{
     task::JoinHandle,
 };
 
+use crate::channel;
+
 /// Safer alternative to raw `tokio::spawn`.
 ///
 /// It can be used to spawn the set of *background tasks* which effectively
@@ -47,7 +49,7 @@ impl BackgroundSpawner {
                 _ => return,
             };
             if err_sender.send(err).is_err() {
-                eprintln!("error channel closed")
+                // eprintln!("error channel closed")
             }
         })
     }
@@ -57,7 +59,11 @@ impl BackgroundSpawner {
 pub struct BackgroundMonitor {
     err_sender: UnboundedSender<crate::Error>,
     err_receiver: UnboundedReceiver<crate::Error>,
+    watching: Watching,
 }
+
+#[derive(Debug)]
+struct Watching(bool);
 
 impl Default for BackgroundMonitor {
     fn default() -> Self {
@@ -65,6 +71,7 @@ impl Default for BackgroundMonitor {
         Self {
             err_sender,
             err_receiver,
+            watching: Watching(true),
         }
     }
 }
@@ -78,17 +85,52 @@ impl BackgroundMonitor {
 
     pub async fn wait(mut self) -> crate::Result<()> {
         drop(self.err_sender);
-        match self.err_receiver.recv().await {
-            Some(err) => Err(err),
-            None => Ok(()),
+        self.watching.0 = false;
+        let mut channel_err = None;
+        while let Some(err) = self.err_receiver.recv().await {
+            if err.is::<channel::Error>() {
+                channel_err = Some(err);
+                continue;
+            }
+            if err.is::<tokio::sync::oneshot::error::RecvError>() {
+                channel_err = Some(err);
+                continue;
+            }
+            Err(err)?
+        }
+        if let Some(err) = channel_err {
+            println!("postponed reporting channel error");
+            Err(err)
+        } else {
+            Ok(())
         }
     }
 
     pub async fn wait_task<T>(&mut self, task: impl Future<Output = T>) -> crate::Result<T> {
-        tokio::select! {
-            result = task => Ok(result),
-            err = self.err_receiver.recv() =>
-                Err(err.expect("error channel opens")),
-        }
+        let err = tokio::select! {
+            result = task => return Ok(result),
+            err = self.err_receiver.recv() => err.expect("error channel opens"),
+        };
+        self.watching.0 = false;
+        Err(err)
+    }
+
+    pub fn start(
+        on_err: impl FnOnce(crate::Error) + Send + 'static,
+    ) -> (JoinHandle<()>, BackgroundSpawner) {
+        let monitor = Self::default();
+        let spawner = monitor.spawner();
+        let handle = tokio::spawn(async move {
+            if let Err(err) = monitor.wait().await {
+                on_err(err)
+            }
+        });
+        (handle, spawner)
+    }
+}
+
+impl Drop for Watching {
+    fn drop(&mut self) {
+        assert!(!self.0, "dropping backgrond monitor when still watching")
     }
 }

@@ -394,7 +394,7 @@ pub async fn session(
             VerifiedFindPeerOk(crate::Result<(Addr, FindPeerOk)>),
             Submit(((Location, PeerId), PromiseSender<FindPeerOk>)),
             JoinFindSession(()),
-            Timeout(PeerId),
+            Timeout((Location, PeerId)),
             Stop,
         }
         let select = async {
@@ -414,7 +414,7 @@ pub async fn session(
             submit = submit_source.next() => Select::Submit(submit?),
             timeout = timeout_source.next() => Select::Timeout(timeout?),
         } {
-            Select::Stop => break Ok(()),
+            Select::Stop => break,
             Select::JoinFindSession(()) => {}
             Select::Subscribe(((target, count), event)) => {
                 find_sessions.spawn(find_session(
@@ -428,15 +428,23 @@ pub async fn session(
                 ));
             }
             Select::Submit(((target, id), result)) => {
-                let (find_peer_ok, promise_find_peer_ok) = promise_channel();
-                find_peer_ok_events.insert((target, id), find_peer_ok);
+                let (message, promise_message) = promise_channel();
+                let evicted = find_peer_ok_events.insert((target, id), message);
+                assert!(
+                    evicted.is_none(),
+                    "concurrent contactinng same peer for same target"
+                );
                 let timeout_event = timeout_event.clone();
                 peer.spawner.spawn(async move {
-                    let Ok(message) = timeout(Duration::from_secs(1), promise_find_peer_ok).await
-                    else {
-                        return timeout_event.send(id);
-                    };
-                    result.resolve(message?)
+                    match timeout(Duration::from_secs(1), promise_message).await {
+                        Ok(message) => {
+                            // if message.is_err() {
+                            //     println!("target {target:02x?} id {id:02x?}, {}", message.is_ok())
+                            // }
+                            result.resolve(message?)
+                        }
+                        Err(_) => timeout_event.send((target, id)),
+                    }
                 });
             }
             Select::Message((remote, Message::FindPeer(message))) => {
@@ -501,11 +509,15 @@ pub async fn session(
                     find_peer_ok.resolve(message)?
                 }
             }
-            Select::Timeout(id) => {
+            Select::Timeout((target, id)) => {
+                // println!("timeout target {target:02x?} id {id:02x?}");
+                find_peer_ok_events.remove(&(target, id)).unwrap();
                 buckets.remove(&id);
             }
         }
     }
+    assert!(find_peer_ok_events.is_empty());
+    Ok(())
 }
 
 pub async fn bootstrap_session(
@@ -527,12 +539,18 @@ pub async fn bootstrap_session(
     )
     .await?;
     let (handle, source) = event_channel();
-    let mut events = Vec::new();
-    for i in 0..U256::BITS - 1 {
-        let d = (U256::from_le_bytes(rand::random()) | U256::ONE << (U256::BITS - 1)) >> i;
-        events.push(handle.subscribe((distance_from(&peer_id, d), 20))?)
-    }
-    drop(handle);
+    peer.spawner.spawn(async move {
+        let mut targets = HashSet::new();
+        for i in 0..U256::BITS - 1 {
+            let d = (U256::from_le_bytes(rand::random()) | U256::ONE << (U256::BITS - 1)) >> i;
+            let target = distance_from(&peer_id, d);
+            // assert_eq!(buckets.index(&target), i as _);
+            assert!(targets.insert(target));
+            let mut event = handle.subscribe((target, 20))?;
+            while event.option_next().await.is_some() {}
+        }
+        Ok(())
+    });
     session(peer, buckets, source, message_source, transport).await
 }
 

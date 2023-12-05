@@ -75,6 +75,10 @@ where
         }
         Ok(())
     }
+
+    fn wrap<W>(self, w: W) -> WrapTransport<Self, M, W> {
+        WrapTransport(self, w, Default::default())
+    }
 }
 
 pub trait Wrap<M, N> {

@@ -75,6 +75,13 @@ type App = State<Arc<AppState>>;
 
 async fn run_peer(State(state): App, Json(config): Json<messages::Config>) -> impl IntoResponse {
     async {
+        let shutdown = state.shutdown.clone();
+        let (monitor, spawner) = BackgroundMonitor::start(move |err| {
+            println!("{err}");
+            println!("{}", err.backtrace());
+            shutdown.cancel()
+        });
+
         let mut rng = StdRng::seed_from_u64(config.seed);
         let mut records = Vec::new();
         let mut signer = None;
@@ -104,7 +111,6 @@ async fn run_peer(State(state): App, Json(config): Json<messages::Config>) -> im
         let mut rng = repeat_with(|| StdRng::from_seed(rng.gen()))
             .nth(config.index.0 * config.num_host_peer + config.index.1)
             .unwrap();
-        let monitor = BackgroundMonitor::default();
         let addr = Addr::Socket((host, 20000 + config.index.1 as u16).into());
         let run_record = PeerRecord::new(&signer, addr.clone())?;
         let mut buckets = Buckets::new(run_record.clone());
@@ -118,15 +124,13 @@ async fn run_peer(State(state): App, Json(config): Json<messages::Config>) -> im
         let peer = Peer {
             verifier: Verifier::from(&signer),
             signer: signer.into(),
-            spawner: monitor.spawner(),
+            spawner: spawner.clone(),
         };
         let (message_event, mut message_source) = event_channel();
         let socket = UdpSocket::bind(addr).await?;
-        monitor
-            .spawner()
-            .spawn(socket.clone().listen_session(message_event));
+        spawner.spawn(socket.clone().listen_session(message_event));
         let (subscribe_handle, subscribe_source) = event_channel();
-        monitor.spawner().spawn(async move {
+        spawner.spawn(async move {
             kademlia::session(
                 peer.into(),
                 &mut buckets,
@@ -139,17 +143,7 @@ async fn run_peer(State(state): App, Json(config): Json<messages::Config>) -> im
 
         let mut session = state.session.lock().unwrap();
         assert!(session.is_none());
-        let shutdown = state.shutdown.clone();
-        *session = Some((
-            tokio::spawn(async move {
-                if let Err(err) = monitor.wait().await {
-                    println!("{err}");
-                    println!("{}", err.backtrace());
-                    shutdown.cancel()
-                }
-            }),
-            subscribe_handle,
-        ));
+        *session = Some((monitor, subscribe_handle));
         Ok::<_, halloween::Error>(Json(messages::Peer::from(run_record)))
     }
     .await
@@ -163,15 +157,22 @@ async fn run_peer(State(state): App, Json(config): Json<messages::Config>) -> im
 
 async fn bootstrap_peer(
     State(state): App,
-    Json(seed_peer): Json<messages::Peer>,
+    Json(config): Json<messages::BootstrapConfig>,
 ) -> impl IntoResponse {
     async {
+        let shutdown = state.shutdown.clone();
+        let (monitor, spawner) = BackgroundMonitor::start(move |err| {
+            println!("{err}");
+            println!("{}", err.backtrace());
+            shutdown.cancel()
+        });
+
         let (secret_key, _) = secp256k1::generate_keypair(&mut rand::thread_rng());
         let signer = Signer::from(secret_key);
-        let socket = UdpSocket::bind(Addr::Socket(([0, 0, 0, 0], 0).into())).await?;
-        let mut monitor = BackgroundMonitor::default();
+        let socket = UdpSocket::bind(Addr::Socket((config.host, 0).into())).await?;
+
         let (message_event, mut message_source) = event_channel();
-        monitor.spawner().spawn(
+        spawner.spawn(
             socket
                 .clone()
                 .listen_session::<kademlia::Message>(message_event),
@@ -180,20 +181,19 @@ async fn bootstrap_peer(
         let peer = Arc::new(Peer {
             verifier: Verifier::from(&signer),
             signer: signer.into(),
-            spawner: monitor.spawner(),
+            spawner: spawner.clone(),
         });
         let mut buckets = Buckets::new(peer_record.clone());
-        buckets.insert(seed_peer.try_into()?);
-        monitor
-            .wait_task(kademlia::bootstrap_session(
-                peer.clone(),
-                &mut buckets,
-                &mut message_source,
-                socket.clone(),
-            ))
-            .await??;
+        buckets.insert(config.seed_peer.try_into()?);
+        kademlia::bootstrap_session(
+            peer.clone(),
+            &mut buckets,
+            &mut message_source,
+            socket.clone(),
+        )
+        .await?;
         let (subscribe_handle, subscribe_source) = event_channel();
-        monitor.spawner().spawn(async move {
+        spawner.spawn(async move {
             kademlia::session(
                 peer,
                 &mut buckets,
@@ -203,19 +203,11 @@ async fn bootstrap_peer(
             )
             .await
         });
+        drop(spawner);
+
         let mut session = state.session.lock().unwrap();
         assert!(session.is_none());
-        let shutdown = state.shutdown.clone();
-        *session = Some((
-            tokio::spawn(async move {
-                if let Err(err) = monitor.wait().await {
-                    println!("{err}");
-                    println!("{}", err.backtrace());
-                    shutdown.cancel()
-                }
-            }),
-            subscribe_handle,
-        ));
+        *session = Some((monitor, subscribe_handle));
         Ok::<_, halloween::Error>(Json(messages::Peer::from(peer_record)))
     }
     .await
