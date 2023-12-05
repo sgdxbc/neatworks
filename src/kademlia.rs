@@ -120,6 +120,9 @@ impl From<PeerRecord> for kademlia_control_messages::Peer {
     }
 }
 
+const MAX_CONCURRENCY: usize = 3;
+const BUCKET_SIZE: usize = 20;
+
 #[derive(Debug)]
 pub struct Peer {
     pub verifier: Verifier,
@@ -155,7 +158,7 @@ async fn find_session(
     for ((id, addr), handle) in closest
         .iter()
         .filter(|record| !contacted.contains(&record.id))
-        .take(3)
+        .take(MAX_CONCURRENCY)
         .map(|record| (record.id, record.addr.clone()))
         .zip(repeat(handle.clone()))
     {
@@ -225,7 +228,7 @@ async fn find_session(
         {
             break;
         }
-        while contacting.len() < 3 {
+        while contacting.len() < MAX_CONCURRENCY {
             let Some(record) = closest
                 .iter()
                 .find(|record| !contacted.contains(&record.id) && !contacting.contains(&record.id))
@@ -268,7 +271,7 @@ impl Buckets {
     pub fn new(center: PeerRecord) -> Self {
         Self {
             center,
-            distances: vec![Default::default(); 256],
+            distances: vec![Default::default(); U256::BITS as _],
         }
     }
 
@@ -288,7 +291,7 @@ impl Buckets {
         {
             bucket.records.remove(bucket_index);
         }
-        if bucket.records.len() < 20 {
+        if bucket.records.len() < BUCKET_SIZE {
             bucket.records.push(record);
             return;
         }
@@ -302,7 +305,7 @@ impl Buckets {
         {
             bucket.cached_records.remove(bucket_index);
         }
-        if bucket.cached_records.len() == 20 {
+        if bucket.cached_records.len() == BUCKET_SIZE {
             bucket.cached_records.remove(0);
         }
         bucket.cached_records.push(record)
@@ -330,6 +333,7 @@ impl Buckets {
         let index = self.index(target);
         let center_distance = distance(&self.center.id, target);
         // look up order derived from libp2p::kad, personally i don't understand why this works
+        // anyway the result is asserted before returning
         // notice that bucket index here is reversed to libp2p's, i.e. libp2p_to_this(i) = 255 - i
         for index in (index..U256::BITS as _)
             .filter(|i| center_distance >> (U256::BITS - 1 - *i as u32) & 1 == 1)
@@ -421,7 +425,8 @@ pub async fn session(
                     peer.clone(),
                     target,
                     count,
-                    buckets.find_closest(&target, count.max(3)),
+                    // minimum count is 2 to prevent returning single record which is this peer
+                    buckets.find_closest(&target, count.max(MAX_CONCURRENCY + 1)),
                     submit_handle.clone(),
                     event,
                     transport.clone(),
@@ -432,18 +437,27 @@ pub async fn session(
                 let evicted = find_peer_ok_events.insert((target, id), message);
                 assert!(
                     evicted.is_none(),
-                    "concurrent contactinng same peer for same target"
+                    "concurrent contactinng peer {} for target {}",
+                    hex_string(&id),
+                    hex_string(&target)
                 );
+                // println!("{} {} submit", hex_string(&id), hex_string(&target));
                 let timeout_event = timeout_event.clone();
                 peer.spawner.spawn(async move {
                     match timeout(Duration::from_secs(1), promise_message).await {
                         Ok(message) => {
-                            // if message.is_err() {
-                            //     println!("target {target:02x?} id {id:02x?}, {}", message.is_ok())
-                            // }
+                            // println!(
+                            //     "{} {} resolved {}",
+                            //     hex_string(&id),
+                            //     hex_string(&target),
+                            //     message.is_ok()
+                            // );
                             result.resolve(message?)
                         }
-                        Err(_) => timeout_event.send((target, id)),
+                        Err(_) => {
+                            // println!("{} {} timeout", hex_string(&id), hex_string(&target));
+                            timeout_event.send((target, id))
+                        }
                     }
                 });
             }
@@ -541,17 +555,27 @@ pub async fn bootstrap_session(
     let (handle, source) = event_channel();
     peer.spawner.spawn(async move {
         let mut targets = HashSet::new();
+        let mut events = Vec::new();
         for i in 0..U256::BITS - 1 {
             let d = (U256::from_le_bytes(rand::random()) | U256::ONE << (U256::BITS - 1)) >> i;
             let target = distance_from(&peer_id, d);
             // assert_eq!(buckets.index(&target), i as _);
             assert!(targets.insert(target));
-            let mut event = handle.subscribe((target, 20))?;
+            // let mut event = handle.subscribe((target, 20))?;
+            // while event.option_next().await.is_some() {}
+            let event = handle.subscribe((target, 20))?;
+            events.push(event)
+        }
+        for mut event in events {
             while event.option_next().await.is_some() {}
         }
         Ok(())
     });
     session(peer, buckets, source, message_source, transport).await
+}
+
+fn hex_string(id: &Location) -> String {
+    id.map(|n| format!("{n:02x}")).join("")
 }
 
 #[cfg(test)]

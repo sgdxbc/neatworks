@@ -162,8 +162,8 @@ async fn bootstrap_peer(
     async {
         let shutdown = state.shutdown.clone();
         let (monitor, spawner) = BackgroundMonitor::start(move |err| {
-            println!("{err}");
-            println!("{}", err.backtrace());
+            eprintln!("{err}");
+            eprintln!("{}", err.backtrace());
             shutdown.cancel()
         });
 
@@ -192,6 +192,7 @@ async fn bootstrap_peer(
             socket.clone(),
         )
         .await?;
+        println!("bootstrap done");
         let (subscribe_handle, subscribe_source) = event_channel();
         spawner.spawn(async move {
             kademlia::session(
@@ -212,8 +213,8 @@ async fn bootstrap_peer(
     }
     .await
     .unwrap_or_else(|err| {
-        println!("{err}");
-        println!("{}", err.backtrace());
+        eprintln!("{err}");
+        eprintln!("{}", err.backtrace());
         state.shutdown.cancel();
         panic!()
     })
