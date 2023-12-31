@@ -42,6 +42,6 @@ struct Query {
     id: PeerId,
 }
 
-pub async fn put_session(data: &[u8]) -> crate::Result<Vec<Location>> {
+pub async fn put_session(_data: &[u8]) -> crate::Result<Vec<Location>> {
     Ok(Default::default())
 }

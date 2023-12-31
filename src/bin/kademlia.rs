@@ -123,7 +123,7 @@ async fn run_peer(State(state): App, Json(config): Json<messages::Config>) -> im
         }
         let peer = Peer {
             verifier: Verifier::from(&signer),
-            signer: signer.into(),
+            signer,
             spawner: spawner.clone(),
         };
         let (message_event, mut message_source) = event_channel();
@@ -180,7 +180,7 @@ async fn bootstrap_peer(
         let peer_record = PeerRecord::new(&signer, Addr::Socket(socket.0.local_addr()?))?;
         let peer = Arc::new(Peer {
             verifier: Verifier::from(&signer),
-            signer: signer.into(),
+            signer,
             spawner: spawner.clone(),
         });
         let mut buckets = Buckets::new(peer_record.clone());

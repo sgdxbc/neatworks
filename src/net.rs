@@ -37,7 +37,6 @@ impl UdpSocket {
     }
 }
 
-#[async_trait::async_trait]
 impl<M> Transport<M> for UdpSocket
 where
     M: BorshSerialize,

@@ -48,32 +48,32 @@ pub enum Addr {
     Untyped(String),
 }
 
-#[async_trait::async_trait]
 pub trait Transport<M>
 where
     Self: Clone + Send + Sync + 'static,
 {
     fn addr(&self) -> Addr;
 
-    async fn send_to(&self, destination: Addr, message: M) -> crate::Result<()>
+    fn send_to(&self, destination: Addr, message: M) -> impl std::future::Future<Output =  crate::Result<()>> + Send
     where
         M: Message;
 
-    async fn send_to_all(
+    fn send_to_all(
         &self,
         destinations: impl Iterator<Item = Addr> + Send,
         message: M,
-    ) -> crate::Result<()>
+    ) -> impl std::future::Future<Output = crate::Result<()>> + Send
     where
         M: Message,
     {
+        async move {
         for destination in destinations {
             if destination == self.addr() {
                 crate::bail!("unexpected loopback message")
             }
             self.send_to(destination, message.clone()).await?
         }
-        Ok(())
+        Ok(())}
     }
 
     fn wrap<W>(self, w: W) -> WrapTransport<Self, M, W> {
@@ -109,7 +109,6 @@ where
     }
 }
 
-#[async_trait::async_trait]
 impl<M, N, T, W> Transport<M> for WrapTransport<T, N, W>
 where
     T: Transport<N>,

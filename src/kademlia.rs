@@ -126,7 +126,7 @@ const BUCKET_SIZE: usize = 20;
 #[derive(Debug)]
 pub struct Peer {
     pub verifier: Verifier,
-    pub signer: Arc<Signer>,
+    pub signer: Signer,
     pub spawner: BackgroundSpawner,
 }
 
@@ -472,7 +472,7 @@ pub async fn session(
                     verifier: peer.verifier,
                     instant: SystemTime(std::time::SystemTime::now()),
                 };
-                let signer = peer.signer.clone();
+                let signer = peer.signer;
                 let transport = transport.clone();
                 peer.spawner.spawn(async move {
                     transport
